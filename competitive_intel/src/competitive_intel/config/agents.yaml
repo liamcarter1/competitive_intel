@@ -12,7 +12,7 @@ trend_scanner:
     You understand that product roadmap signals, R&D investment shifts, and engineering
     talent moves are the earliest indicators of competitive strategy changes.
     You always run multiple targeted searches per competitor to get comprehensive coverage.
-  llm: openai/gpt-4o-mini
+  llm: openai/gpt-4o
 
 company_analyst:
   role: >
@@ -30,7 +30,7 @@ company_analyst:
     packaging changes. You categorize findings specifically for Engineering (what to
     build/improve), Sales (competitive positioning and objection handling), and Strategy
     (market positioning and investment priorities).
-  llm: openai/gpt-4o-mini
+  llm: openai/gpt-4o
 
 strategy_advisor:
   role: >

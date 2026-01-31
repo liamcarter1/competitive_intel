@@ -7,9 +7,7 @@ import gradio as gr
 from anthropic import Anthropic
 from openai import OpenAI
 
-from competitive_intel.crew import CompetitiveIntel
-
-warnings.filterwarnings("ignore", category=SyntaxWarning, module="pysbd")
+from competitive_intel.graph import run_pipeline
 
 OUTPUT_DIR = Path(__file__).parent / "output"
 OUTPUT_DIR.mkdir(exist_ok=True)
@@ -63,8 +61,12 @@ def run_briefing(company: str, industry: str, competitors: str) -> str:
         "current_date": datetime.now().strftime("%Y-%m-%d"),
     }
 
-    result = CompetitiveIntel().crew().kickoff(inputs=inputs)
-    return str(result)
+    result = run_pipeline(
+        company=inputs["company"],
+        industry=inputs["industry"],
+        competitors=inputs["competitors"],
+    )
+    return result
 
 
 def list_reports() -> str:
