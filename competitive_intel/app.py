@@ -3,6 +3,9 @@ import warnings
 from datetime import datetime
 from pathlib import Path
 
+from dotenv import load_dotenv
+load_dotenv()
+
 import gradio as gr
 from anthropic import Anthropic
 from openai import OpenAI
