@@ -1,7 +1,7 @@
-scan_competitors:
+scan_competitor:
   description: >
-    Search the web thoroughly for recent competitive activity in the {industry} industry
-    as of {current_date}. For each competitor in {competitors}, run multiple targeted searches
+    Search the web thoroughly for recent competitive activity about {competitor}
+    in the {industry} industry as of {current_date}. Run multiple targeted searches
     covering different angles. Focus on:
     - New product releases, feature updates, version launches, and product roadmap announcements
     - R&D investments, research papers, patent filings, and technical blog posts
@@ -12,17 +12,17 @@ scan_competitors:
     - Conference talks, demos, and technical previews of upcoming capabilities
     - Customer wins, case studies, and go-to-market messaging changes
     - Analyst reports, market share data, and industry rankings
-    Gather as much relevant, recent intelligence as possible about each competitor
-    relative to {company}. Be thorough — run at least 2-3 searches per competitor
-    with different search terms to cover product, business, and technical angles.
+    Gather as much relevant, recent intelligence as possible about {competitor}
+    relative to {company}. Be thorough — run at least 2-3 searches with different
+    search terms to cover product, business, and technical angles.
   expected_output: >
-    A comprehensive structured list of competitive intelligence findings organized
-    by competitor. For each competitor include:
+    A comprehensive structured list of competitive intelligence findings for
+    {competitor}. Include:
     - Product & Technology: releases, features, technical capabilities, R&D signals
     - Business & Strategy: pricing, partnerships, M&A, funding, go-to-market changes
     - Talent & Organization: key hires, team growth, leadership changes
     Each finding should include the source URL, date, and a 2-3 sentence summary
-    of why it matters. Include at least 5-8 findings per competitor where available.
+    of why it matters. Include at least 5-8 findings where available.
   agent: trend_scanner
 
 analyze_findings:
@@ -60,8 +60,6 @@ analyze_findings:
     supporting evidence from the scan. Include a cross-cutting "Key Patterns" section
     highlighting the 3-5 most significant trends observed across all competitors.
   agent: company_analyst
-  context:
-    - scan_competitors
 
 strategic_recommendations:
   description: >
@@ -149,7 +147,6 @@ write_briefing:
     Formatted as markdown without '```'.
   agent: report_writer
   context:
-    - scan_competitors
     - analyze_findings
     - strategic_recommendations
   output_file: output/briefing.md
