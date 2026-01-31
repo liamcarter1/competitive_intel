@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-A CrewAI-powered competitive intelligence platform with a Gradio web UI. The system orchestrates four AI agents (trend scanner, company analyst, strategy advisor, report writer) in a sequential pipeline to generate executive-ready competitive intelligence briefings. A secondary chat interface allows Q&A against the briefing (via OpenAI) and deep-dive research with live web search (via Anthropic + Serper).
+A LangGraph-powered competitive intelligence platform with a Gradio web UI. The system orchestrates four pipeline nodes (trend scanner, company analyst, strategy advisor, report writer) using a fan-out/fan-in graph to generate executive-ready competitive intelligence briefings. Each node uses its own LLM client (OpenAI or Anthropic) with independent message history, enabling multi-provider pipelines. A secondary chat interface allows Q&A against the briefing (via OpenAI) and deep-dive research with live web search (via Anthropic + Serper).
 
 ## Architecture
 
@@ -14,36 +14,51 @@ competitive_intel/
 ├── output/                         # Generated briefing reports (gitignored)
 └── src/competitive_intel/
     ├── __init__.py
-    ├── main.py                     # CLI entry point (run/train/replay)
-    ├── crew.py                     # CrewAI crew definition and agent/task wiring
+    ├── main.py                     # CLI entry point (run)
+    ├── graph.py                    # LangGraph StateGraph definition and pipeline nodes
     ├── config/
-    │   ├── agents.yaml             # Agent roles, goals, backstories, LLM assignments
-    │   └── tasks.yaml              # Task descriptions, expected outputs, dependencies
+    │   ├── agents.yaml             # Agent roles, goals, backstories (used as system prompts)
+    │   └── tasks.yaml              # Task descriptions and expected outputs (used as user prompts)
     └── tools/
-        └── __init__.py             # Custom tool definitions (currently empty)
+        └── __init__.py             # search_serper() function for web search
 ```
+
+### Pipeline Graph
+
+```
+                    ┌─ scan(competitor_A) ─┐
+User Input ──→ fan_out ─→ scan(competitor_B) ─→ fan_in ──→ analyze ──→ recommend ──→ write_briefing
+                    └─ scan(competitor_C) ─┘
+```
+
+- **Fan-out**: Parallel scan nodes (one per competitor), each calling Serper API then summarizing with GPT-4o
+- **Fan-in**: Aggregates all scan results into shared state
+- **Sequential**: analyze (Claude Sonnet) → recommend (Claude Sonnet) → write_briefing (GPT-4o-mini)
 
 ### Key Components
 
-- **CrewAI Crew** (`crew.py`): Four agents running sequentially — `trend_scanner` (with SerperDevTool) -> `company_analyst` -> `strategy_advisor` -> `report_writer`. Agent configs live in `agents.yaml`, task configs in `tasks.yaml`.
+- **LangGraph Pipeline** (`graph.py`): A `StateGraph` with fan-out/fan-in for parallel competitor scanning, followed by sequential analysis, recommendations, and report writing. Each node makes its own LLM API call with a clean message list — no shared conversation history between nodes.
 - **Gradio App** (`app.py`): Web UI with briefing generation, report loading, quick chat (OpenAI gpt-4o-mini), and deep-dive research (Serper search + Anthropic Claude synthesis).
-- **CLI** (`main.py`): `run()`, `train()`, `replay()` functions callable via `competitive_intel` script entry point.
+- **CLI** (`main.py`): `run()` function callable via `competitive_intel` script entry point.
+- **Config** (`agents.yaml`, `tasks.yaml`): Agent roles/backstories and task descriptions loaded at runtime and interpolated into system/user prompts for each node.
 
 ## Tech Stack
 
 - **Python** >=3.10, <3.14
-- **CrewAI** >=0.108.0 (with tools)
+- **LangGraph** >=0.4.0
+- **LangChain OpenAI** >=0.3.0
+- **LangChain Anthropic** >=0.3.0
 - **Gradio** >=5.22.0
 - **Anthropic SDK** >=0.40.0
-- **OpenAI SDK** (transitive via crewai)
+- **OpenAI SDK** >=1.0.0
 - **Package manager**: uv (with hatchling build backend)
 
 ## Environment Variables (Required)
 
 ```
-OPENAI_API_KEY          # Used by CrewAI agents and quick chat
-ANTHROPIC_API_KEY       # Used by deep-dive synthesis
-SERPER_API_KEY          # Used by trend_scanner agent and deep-dive web search
+OPENAI_API_KEY          # Used by scan and write_briefing nodes, and quick chat
+ANTHROPIC_API_KEY       # Used by analyze and recommend nodes, and deep-dive synthesis
+SERPER_API_KEY          # Used by scan nodes and deep-dive web search
 ```
 
 These MUST be set in the environment before running. Never commit these values.
@@ -54,7 +69,7 @@ These MUST be set in the environment before running. Never commit these values.
 cd competitive_intel
 uv sync                    # Install dependencies
 uv run python app.py       # Launch the Gradio web UI
-uv run competitive_intel   # Run the CLI crew pipeline
+uv run competitive_intel   # Run the CLI pipeline
 ```
 
 ## Security Requirements
@@ -68,7 +83,7 @@ uv run competitive_intel   # Run the CLI crew pipeline
 ### Input Handling
 - All user inputs from the Gradio UI (company, industry, competitors, chat messages) are passed to external LLM APIs. Treat these as untrusted.
 - Do not construct shell commands, file paths, or SQL queries from user input.
-- User input passed to `_search_web()` goes directly to the Serper API — do not add any filesystem or command execution based on this input.
+- User input passed to `_search_web()` and `search_serper()` goes directly to the Serper API — do not add any filesystem or command execution based on this input.
 - Validate that user inputs are non-empty strings before processing (as `run_briefing()` already does).
 
 ### Dependency Security
@@ -83,7 +98,7 @@ uv run competitive_intel   # Run the CLI crew pipeline
 
 ### Network Security
 - All external API calls (OpenAI, Anthropic, Serper) must use HTTPS. Do not downgrade to HTTP.
-- Set explicit timeouts on all HTTP requests (as `_search_web()` already does with `timeout=15`).
+- Set explicit timeouts on all HTTP requests (as `search_serper()` does with `timeout=15`).
 - Do not add proxy or redirect-following logic that could leak credentials.
 
 ## Coding Protocols
@@ -100,33 +115,36 @@ uv run competitive_intel   # Run the CLI crew pipeline
 - Use f-strings for string formatting.
 - Imports: standard library first, then third-party, then local. No blank-line separation is enforced but keep it logical.
 
-### CrewAI Patterns
-- Agent definitions go in `config/agents.yaml`. Task definitions go in `config/tasks.yaml`. Wire them in `crew.py` using the `@agent` and `@task` decorators.
-- Each agent method in `crew.py` returns an `Agent` with `config=self.agents_config['agent_name']`.
-- Each task method in `crew.py` returns a `Task` with `config=self.tasks_config['task_name']`.
-- The crew runs in `Process.sequential` mode. If adding new agents/tasks, place them in the correct pipeline order.
-- Custom tools go in `src/competitive_intel/tools/__init__.py`.
+### LangGraph Patterns
+- Agent prompts (role, goal, backstory) live in `config/agents.yaml`. Task prompts (description, expected_output) live in `config/tasks.yaml`.
+- Each graph node in `graph.py` loads its prompts from these YAML configs, interpolates input variables, and makes a direct LLM call.
+- The graph uses `Send()` for fan-out (parallel competitor scans) and sequential edges for the analysis pipeline.
+- Each node constructs its own message list (system + user) — never pass message history between nodes.
+- State is shared via a `GraphState` TypedDict. Use `Annotated[list, operator.add]` for fields that accumulate across parallel nodes (e.g., `scan_results`).
 
 ### LLM Model Selection
-- CrewAI agents: model is set per-agent in `agents.yaml` via the `llm` field (e.g., `openai/gpt-4o-mini`).
-- Quick chat: uses `gpt-4o-mini` with low temperature (0.1).
-- Deep-dive synthesis: uses `claude-3-5-sonnet-latest` with low temperature (0.1).
-- When changing models, update the relevant config — do not hardcode model names in multiple places.
+- Scan nodes: GPT-4o (reliable for search result summarization)
+- Analyze node: Claude Sonnet (better analytical reasoning)
+- Recommend node: Claude Sonnet (better strategic synthesis)
+- Write briefing node: GPT-4o-mini (cost-effective for formatting)
+- Quick chat: GPT-4o-mini with low temperature (0.1)
+- Deep-dive synthesis: Claude 3.5 Sonnet with low temperature (0.1)
+- Model assignments are in `graph.py` node functions. Each node is independent so models can be changed freely.
 
 ### Error Handling
 - Catch exceptions at UI boundaries (Gradio callbacks) and display user-friendly messages.
 - Do not catch broad exceptions silently. Log or surface the error.
-- In CrewAI pipeline code (`main.py`), re-raise with context so failures are diagnosable.
+- In pipeline code (`main.py`), re-raise with context so failures are diagnosable.
 
-### Adding New Agents or Tasks
-1. Define the agent config in `agents.yaml` (role, goal, backstory, llm).
-2. Define the task config in `tasks.yaml` (description, expected_output, agent, context dependencies).
-3. Add corresponding `@agent` and `@task` methods in `crew.py`.
-4. The crew auto-discovers agents/tasks via the `@CrewBase` decorator — ordering in `crew.py` determines pipeline order.
+### Adding New Nodes
+1. Define the agent config in `agents.yaml` (role, goal, backstory).
+2. Define the task config in `tasks.yaml` (description, expected_output).
+3. Add a node function in `graph.py` that loads prompts from config, calls an LLM, and returns state updates.
+4. Wire the node into the graph in `build_graph()` with appropriate edges.
 
 ### Adding New Tools
-1. Create the tool class in `src/competitive_intel/tools/__init__.py`.
-2. Import and attach it to the relevant agent in `crew.py` via the `tools=[]` parameter.
+1. Add the tool function in `src/competitive_intel/tools/__init__.py`.
+2. Call it directly from the relevant graph node — no LLM tool-calling needed.
 3. Tools that call external APIs must use environment variables for credentials and set request timeouts.
 
 ## Files to Never Commit
@@ -143,4 +161,4 @@ No test suite exists yet. When adding tests:
 - Place tests in a `tests/` directory at the project root.
 - Use `pytest` as the test runner.
 - Mock all external API calls (OpenAI, Anthropic, Serper) — never make real API calls in tests.
-- Test the crew wiring, input validation, and output formatting independently.
+- Test the graph node functions, input validation, and output formatting independently.
