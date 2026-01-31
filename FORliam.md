@@ -125,6 +125,16 @@ LangGraph handles the fan-in automatically: the `scan_results` field in state us
 
 **The lesson**: When removing a dependency, grep for its name across the codebase. You'll often find imports, warning filters, config entries, or comments referencing it that should be cleaned up.
 
+### Bug 4: The Retired Model That Broke Deep Dive
+
+**What happened**: Everything in the pipeline worked — scans, analysis, recommendations, briefing generation, quick chat. But the deep dive feature crashed with a `404 Not Found` error: `model: claude-3-5-sonnet-latest`.
+
+**Why it happened**: The deep dive synthesis in `app.py` was hardcoded to use `claude-3-5-sonnet-latest`. Anthropic had retired that model alias — it no longer resolved to anything. The pipeline nodes (which we wrote fresh during the LangGraph rewrite) used `claude-sonnet-4-20250514`, but `app.py`'s deep dive code was pre-existing and still referenced the old model name. We tested the pipeline thoroughly but almost missed this because deep dive is a separate code path that doesn't go through the graph at all.
+
+**The fix**: Changed `claude-3-5-sonnet-latest` to `claude-sonnet-4-20250514` in `app.py`.
+
+**The lesson**: Model aliases like `*-latest` feel convenient but are a trap. They're mutable pointers — the provider can retire or redirect them at any time, and your code breaks with no warning. Pin to a specific model version (like `claude-sonnet-4-20250514`) so you control when you upgrade. And when you're testing a system with multiple LLM integration points, test *every* code path that calls an LLM, not just the main pipeline. The deep dive was a completely separate call to Anthropic that happened to use a different model name — easy to overlook because it wasn't part of the LangGraph rewrite.
+
 ---
 
 ## Potential Pitfalls and How to Avoid Them
