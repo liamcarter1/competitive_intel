@@ -167,7 +167,7 @@ def deep_dive(question: str, briefing_text: str) -> str:
 
     # Step 3: Synthesize a grounded answer using Claude
     response = anthropic_client.messages.create(
-        model="claude-3-5-sonnet-latest",
+        model="claude-sonnet-4-20250514",
         max_tokens=4096,
         temperature=0.1,
         system=DEEP_DIVE_SYSTEM.format(
