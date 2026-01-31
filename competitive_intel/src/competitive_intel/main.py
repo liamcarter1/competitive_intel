@@ -1,4 +1,7 @@
 #!/usr/bin/env python
+from dotenv import load_dotenv
+load_dotenv()
+
 from competitive_intel.graph import run_pipeline
 
 
