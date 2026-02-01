@@ -1,10 +1,14 @@
 import json
+import os
 import warnings
 from datetime import datetime
 from pathlib import Path
 
 from dotenv import load_dotenv
 load_dotenv()
+
+os.environ.pop("LANGSMITH_TRACING", None)
+os.environ.pop("LANGCHAIN_TRACING_V2", None)
 
 import gradio as gr
 from anthropic import Anthropic
@@ -181,19 +185,34 @@ def deep_dive(question: str, briefing_text: str) -> str:
 
 # --- Gradio UI ---
 
-with gr.Blocks(title="Competitive Intelligence Monitor") as app:
+danfoss_theme = gr.themes.Soft(
+    primary_hue=gr.themes.Color(
+        c50="#fef2f2", c100="#fee2e2", c200="#fecaca", c300="#fca5a5",
+        c400="#f87171", c500="#E2000F", c600="#dc2626", c700="#b91c1c",
+        c800="#991b1b", c900="#7f1d1d", c950="#450a0a",
+    ),
+)
+
+with gr.Blocks(title="Danfoss Power Solutions — Competitive Intelligence Monitor") as app:
     briefing_state = gr.State("")
 
-    gr.Markdown("# Competitive Intelligence Monitor")
+    gr.Image(
+        value=str(Path(__file__).parent / "Vickers_by_Danfoss-Logo.png"),
+        show_label=False,
+        height=80,
+        width=200,
+        container=False,
+    )
+    gr.Markdown("# Danfoss Power Solutions — Competitive Intelligence Monitor")
     gr.Markdown("Enter a company, its industry, and key competitors to generate a strategic intelligence briefing.")
 
     with gr.Row():
-        company = gr.Textbox(label="Company Name", placeholder="e.g. OpenAI")
-        industry = gr.Textbox(label="Industry", placeholder="e.g. Artificial Intelligence")
+        company = gr.Textbox(label="Company Name", placeholder="e.g. Danfoss Power Solutions")
+        industry = gr.Textbox(label="Industry", placeholder="e.g. Hydraulics & Mobile Machinery")
 
     competitors = gr.Textbox(
         label="Competitors (comma-separated)",
-        placeholder="e.g. Anthropic, Google DeepMind, Meta AI, Mistral",
+        placeholder="e.g. Parker Hannifin, Bosch Rexroth, Eaton Hydraulics",
     )
 
     generate_btn = gr.Button("Generate Briefing", variant="primary")
@@ -206,7 +225,11 @@ with gr.Blocks(title="Competitive Intelligence Monitor") as app:
             result = run_briefing(company, industry, competitors)
             yield {status: "*Briefing complete!*", output: result, briefing_state: result}
         except Exception as e:
-            yield {status: f"*Error: {e}*", output: "", briefing_state: ""}
+            import traceback
+            tb = traceback.format_exc()
+            log_path = OUTPUT_DIR / "error.log"
+            log_path.write_text(tb, encoding="utf-8")
+            yield {status: f"*Error: {e}*", output: f"Full traceback written to {log_path}", briefing_state: ""}
 
     generate_btn.click(
         fn=on_generate,
@@ -273,4 +296,4 @@ with gr.Blocks(title="Competitive Intelligence Monitor") as app:
 
 
 if __name__ == "__main__":
-    app.launch()
+    app.launch(theme=danfoss_theme)
