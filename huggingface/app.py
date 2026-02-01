@@ -193,7 +193,7 @@ danfoss_theme = gr.themes.Soft(
     ),
 )
 
-with gr.Blocks(title="Danfoss Power Solutions — Competitive Intelligence Monitor") as app:
+with gr.Blocks(title="Danfoss Power Solutions — Competitive Intelligence Monitor", theme=danfoss_theme) as app:
     briefing_state = gr.State("")
 
     gr.Image(
@@ -296,4 +296,4 @@ with gr.Blocks(title="Danfoss Power Solutions — Competitive Intelligence Monit
 
 
 if __name__ == "__main__":
-    app.launch(theme=danfoss_theme)
+    app.launch()
