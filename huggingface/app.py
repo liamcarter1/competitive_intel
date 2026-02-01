@@ -197,7 +197,7 @@ with gr.Blocks(title="Danfoss Power Solutions — Competitive Intelligence Monit
     briefing_state = gr.State("")
 
     gr.Image(
-        value=str(Path(__file__).parent / "csm_logo_danfoss_per_sito_web__5e8f30e4f0.png"),
+        value=str(Path(__file__).parent / "Vickers_by_Danfoss-Logo.png"),
         show_label=False,
         height=80,
         width=200,
@@ -256,7 +256,7 @@ with gr.Blocks(title="Danfoss Power Solutions — Competitive Intelligence Monit
         "**Research This** runs a live web search for a thorough, source-cited deep dive."
     )
 
-    chatbot = gr.Chatbot(label="Briefing Q&A", height=400)
+    chatbot = gr.Chatbot(label="Briefing Q&A", height=400, type="messages")
     chat_input = gr.Textbox(
         label="Your question",
         placeholder="e.g. What are the key product changes from Parker this quarter?",
