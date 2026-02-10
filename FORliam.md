@@ -18,15 +18,21 @@ The core of the system is a **graph-based pipeline** built with LangGraph. Pictu
 
 ```
                     ┌─ scan(Anthropic) ────┐
-User Input ──→ fan_out ─→ scan(DeepMind) ────→ fan_in ──→ analyze ──→ recommend ──→ write_briefing
-                    └─ scan(Mistral) ─────┘
+User Input ──→ fan_out ─→ scan(DeepMind) ────→ fan_in ──→ analyze ──→ recommend ──→ evaluate ─── pass ──→ write_briefing
+                    └─ scan(Mistral) ─────┘                ↑            ↑              │
+                                                           │            │              ├─ fail_analysis ──→ retry_analyze ─┐
+                                                           │            │              └─ fail_recs ──→ retry_recommend ──→│
+                                                           │            └──────────────────────────────────────────────────┘
+                                                           └───────────────────────────────────────────────────────────────┘
 ```
 
 1. **Fan-out**: The system splits into parallel tracks — one per competitor. Each track searches the web (via Serper API) and summarizes what it finds. If you have 4 competitors, 4 scans run simultaneously. This is like sending 4 scouts out in different directions instead of one scout visiting 4 locations sequentially.
 
 2. **Fan-in**: All the scout reports land back in one place — a shared `GraphState` dictionary.
 
-3. **Sequential chain**: The combined intelligence flows through three more nodes in order: analysis, recommendations, final report. Each one builds on the previous output.
+3. **Sequential chain**: The combined intelligence flows through analysis, recommendations, and then an **evaluator** before reaching the final report. Each one builds on the previous output.
+
+4. **Quality gate**: The evaluator checks the analysis and recommendations against the rubrics defined in `tasks.yaml`. If either deliverable falls short, the pipeline loops back to re-run only the failing node(s) with specific feedback injected into the prompt. A max retry limit (2 per node) prevents infinite loops.
 
 The key design principle: **each node is an island**. It gets a fresh LLM conversation with its own system prompt and user message. No message history leaks between nodes. This is the whole reason we moved to LangGraph (more on that below).
 
@@ -70,6 +76,7 @@ LangGraph solved this by giving us explicit control. Each node constructs its ow
 | Scan | GPT-4o | Solid at summarizing search results, reliable tool-adjacent behavior |
 | Analyze | Claude Sonnet | Stronger at structured analytical reasoning, better at segmenting for audiences |
 | Recommend | Claude Sonnet | Better at strategic synthesis, produces more actionable outputs |
+| Evaluate | Claude Sonnet | Good analytical judgment for rubric-based evaluation — same caliber as the nodes it judges |
 | Write briefing | GPT-4o-mini | The cheapest option — by this point, the hard thinking is done, and this node just formats |
 
 This is a pattern worth remembering: **match the model to the cognitive demand of the task**. You wouldn't hire a senior architect to paint walls. The scan node does relatively mechanical work (read search results, extract key points), so a cheaper/faster model works fine. The analysis node needs to reason across multiple competitors and segment findings for different audiences — that's where you want the stronger model.
@@ -92,6 +99,26 @@ The original CrewAI version scanned competitors one at a time. With 4 competitor
 This is a real-world performance win. Each scan takes maybe 15-30 seconds (network calls + LLM inference). Sequential: 60-120 seconds. Parallel: still 15-30 seconds. The analysis, recommendation, and writing stages have to be sequential (each depends on the previous), but the scanning stage is embarrassingly parallel — each competitor scan is completely independent.
 
 LangGraph handles the fan-in automatically: the `scan_results` field in state uses `Annotated[list[str], operator.add]`, which means results from parallel nodes get concatenated into a single list. This is a nice pattern — you declare the merge strategy in the type annotation, and the framework handles the rest.
+
+### The Evaluator: A Quality Gate That Loops
+
+Here's a problem with any LLM pipeline: the output quality is inconsistent. Sometimes the analysis node produces a beautifully structured document with all three audience sections, urgency ratings, and a Key Patterns summary. Other times, it generates a wall of vague observations with no structure. The recommendations node might produce 18 well-rated strategic items one run and 7 generic platitudes the next. Whatever comes out goes straight into the final briefing — there's no quality gate.
+
+The evaluator fixes this with an **LLM-as-judge** pattern. Think of it like a code review before merging: the `evaluate` node reads the analysis and recommendations, checks them against the rubrics already defined in `tasks.yaml` (are there 3 audience sections? are there 12-20 recommendations? do they have impact/difficulty ratings?), and returns a verdict: pass, fail_analysis, fail_recommendations, or fail_both.
+
+If something fails, the pipeline **loops back** to re-run only the failing node — but this time, the evaluator's specific feedback gets injected into the prompt. Instead of the LLM seeing just the original task description, it also sees something like: *"PREVIOUS ATTEMPT FEEDBACK: Missing Key Patterns section. Engineering section lacks urgency ratings. Only 3 of 5 required trends identified."* The LLM gets a second chance to get it right, with concrete guidance on what was wrong.
+
+A few design decisions worth understanding:
+
+**Why fail-open on parse errors?** The evaluator is asked to return JSON (`{"evaluation_result": "pass", "evaluation_feedback": "..."}`). But LLMs aren't reliable JSON producers — sometimes they wrap it in markdown fences, sometimes they add preamble text. If JSON parsing fails, the evaluator defaults to `"pass"` and logs a warning. The alternative — blocking the entire pipeline because the evaluator messed up its formatting — is worse than letting a potentially imperfect report through. The evaluator is a safety net, not a brick wall.
+
+**Why max 2 retries?** Each retry costs an LLM call (or two — if the analysis is retried, the recommendation step re-runs too since it depends on the analysis). The math: best case is 1 extra call (~5-10 seconds), typical retry is 2-3 extra calls (~20-30 seconds), worst case is 5 extra calls (~60-120 seconds). Beyond 2 retries, the output is unlikely to improve significantly — if the LLM can't get it right in 3 attempts, a 4th probably won't help. Better to let the imperfect report through and let the human reader notice the gaps.
+
+**Why fix analysis first when both fail?** Recommendations depend on analysis. If the analysis is vague and generic, the recommendations will be too — no matter how many times you retry the recommendation node. Fixing analysis first, then letting recommendations re-run on the improved analysis, gives the best chance of both meeting the bar.
+
+**Why not evaluate scan results?** Scans are data gathering with inherent source variability — some competitors have tons of recent news, others are quiet. Failing a scan because "not enough findings" would just cause retry loops with no improvement (the web results don't change). The evaluator focuses on the nodes where LLM quality actually varies: the analytical and synthesis stages.
+
+This pattern — LLM-as-judge with conditional routing — is reusable. Any time you have an LLM producing structured output that must meet a spec, you can slot in an evaluator node that checks the spec and loops back with feedback. The key ingredients: a rubric (what "good" looks like), a JSON verdict format, fail-open defaults, and a retry cap.
 
 ---
 
@@ -151,6 +178,18 @@ The agent/task YAML configs use Python `.format()` interpolation (`{company}`, `
 
 **Avoidance**: When adding new YAML templates, make sure every `{variable}` has a corresponding key in the inputs dict. Test the interpolation locally before running the full pipeline.
 
+### Pitfall: LLM-as-Judge JSON Fragility
+
+The evaluator asks Claude to return a raw JSON object. LLMs frequently violate this: they wrap the JSON in ```json fences, add "Here's my evaluation:" preamble, or produce slightly malformed JSON (trailing commas, single quotes). The evaluator handles this by catching `json.JSONDecodeError` and defaulting to "pass" — but a stricter evaluator that tried to fail-hard on bad JSON would block the pipeline on formatting issues, not quality issues.
+
+**Avoidance**: When asking an LLM to produce structured output, always have a fallback. Parse optimistically, fail open, and log the raw output when parsing fails so you can tune the prompt later. Don't let a formatting hiccup in a quality gate shut down the whole pipeline.
+
+### Pitfall: Retry Loops and Cost Multiplication
+
+The evaluator adds at least 1 LLM call per run (the evaluation itself). In the worst case — both analysis and recommendations fail twice — it adds 5 extra calls: 2 evaluation calls, 2 retry-analyze calls, and 1 retry-recommend call (plus the recommend nodes that follow each retry-analyze). This can double the cost and latency of a run.
+
+**Avoidance**: Monitor retry rates in production. If the evaluator fails outputs more than ~20% of the time, the problem is the upstream prompts, not the quality gate. Tighten the task descriptions in `tasks.yaml` so the LLM produces passing output on the first attempt more often. The evaluator should be a safety net, not the primary quality mechanism.
+
 ### Pitfall: LLM Cost Surprises
 
 The analysis and recommendation nodes send the full scan results (potentially thousands of tokens per competitor) as input context. With 4+ competitors, the input to the `analyze` node can easily be 10,000+ tokens. Claude Sonnet isn't cheap at scale.
@@ -192,6 +231,12 @@ The pipeline doesn't silently swallow errors. If a Serper search fails, the erro
 ### Pragmatism Over Purity
 
 The scan node uses hardcoded search query templates instead of dynamic LLM-generated queries. The `search_serper()` function is 10 lines of code instead of a proper tool class with retry logic and rate limiting. The YAML configs are loaded once at module level instead of being dependency-injected. These are all "impure" choices that a textbook might frown at — but they make the code simpler, faster to debug, and easier to understand. Good engineers optimize for the team's ability to maintain and modify the code, not for architectural elegance points.
+
+### Design for Graceful Degradation
+
+The evaluator embodies a principle that runs through this whole project: **never let a quality mechanism become a reliability risk**. The evaluator defaults to "pass" when it can't parse JSON. Retries are capped at 2 so the pipeline always completes. If all retries are exhausted, the pipeline proceeds with a warning instead of crashing. At every decision point, the question is "what happens if this goes wrong?" and the answer is always "we continue with what we have and flag the issue" rather than "we halt and catch fire."
+
+This is a pattern from production systems engineering: monitoring and quality tools should never be the thing that takes down the system. A broken smoke detector shouldn't set the building on fire.
 
 ### Know When to Rip and Replace
 
