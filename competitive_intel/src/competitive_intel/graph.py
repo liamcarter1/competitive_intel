@@ -393,6 +393,7 @@ def scan_annual_report(state: AnnualReportState) -> dict:
     system = _agent_system_prompt("annual_report_analyst", inputs)
     desc, expected = _task_prompt("scan_annual_report", inputs)
 
+    company = state["company"]
     industry = state["industry"]
     queries = [
         f"{competitor} {industry} official website products solutions",
@@ -407,9 +408,12 @@ def scan_annual_report(state: AnnualReportState) -> dict:
         f"{competitor} {industry} acquisition merger partnership {year} OR {prev_year}",
         f"{competitor} {industry} revenue by region geographic expansion {year} OR {prev_year}",
         f"{competitor} {industry} OEM contracts customer wins {year}",
-        f"{competitor} {industry} patent filings technology innovation {year} OR {prev_year}",
+        f"{competitor} hydraulic patent USPTO OR Espacenet {year} OR {prev_year}",
         f"{competitor} {industry} tariff regulatory compliance risk {year}",
         f"{competitor} {industry} news press release announcement {year}",
+        f"{competitor} {industry} product catalog model series specifications datasheet",
+        f"{competitor} vs {company} {industry} comparison review",
+        f"{competitor} {industry} OEM customer wins named accounts case study",
     ]
 
     all_results = []

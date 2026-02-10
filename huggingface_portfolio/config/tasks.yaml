@@ -1,0 +1,152 @@
+scan_competitor:
+  description: >
+    Search the web thoroughly for recent competitive activity about {competitor}
+    in the {industry} industry as of {current_date}. Run multiple targeted searches
+    covering different angles. Focus on:
+    - New product releases, feature updates, version launches, and product roadmap announcements
+    - R&D investments, research papers, patent filings, and technical blog posts
+    - Engineering team growth, key technical hires, and talent acquisitions
+    - Pricing changes, new packaging/tiers, or business model shifts
+    - Partnerships, integrations, ecosystem plays, and channel strategy changes
+    - Acquisitions, mergers, funding rounds, and financial performance indicators
+    - Conference talks, demos, and technical previews of upcoming capabilities
+    - Customer wins, case studies, and go-to-market messaging changes
+    - Analyst reports, market share data, and industry rankings
+    Gather as much relevant, recent intelligence as possible about {competitor}
+    relative to {company}. Be thorough — run at least 2-3 searches with different
+    search terms to cover product, business, and technical angles.
+  expected_output: >
+    A comprehensive structured list of competitive intelligence findings for
+    {competitor}. Include:
+    - Product & Technology: releases, features, technical capabilities, R&D signals
+    - Business & Strategy: pricing, partnerships, M&A, funding, go-to-market changes
+    - Talent & Organization: key hires, team growth, leadership changes
+    Each finding should include the source URL, date, and a 2-3 sentence summary
+    of why it matters. Include at least 5-8 findings where available.
+  agent: trend_scanner
+
+analyze_findings:
+  description: >
+    Analyze the raw competitive intelligence gathered about {company}'s competitors
+    ({competitors}) in the {industry} industry. Produce analysis segmented for three
+    audiences:
+
+    FOR ENGINEERING LEADERSHIP:
+    - Product capability gaps: where competitors have shipped features {company} lacks
+    - Technology bets: what technical approaches competitors are investing in
+    - R&D spending patterns: signals about where competitors are increasing/decreasing investment
+    - Build vs. buy signals: competitor acquisitions that indicate capability gaps
+    - Open source and ecosystem moves that affect the technical landscape
+
+    FOR SALES LEADERSHIP:
+    - Competitive positioning shifts: how competitors are changing their messaging
+    - Pricing and packaging changes that affect deal competitiveness
+    - Customer segment targeting: which markets competitors are pursuing aggressively
+    - Win/loss signals: customer switches, case studies, and reference accounts
+    - Partner and channel moves that could affect pipeline
+
+    FOR STRATEGY LEADERSHIP:
+    - Market trend patterns across all competitors
+    - Potential threats ranked by likelihood and impact
+    - Emerging opportunities {company} could exploit
+    - Investment areas where multiple competitors are converging (consensus bets)
+    - Contrarian opportunities where competitors are NOT investing
+
+    Categorize all findings by urgency: immediate (act this week), short-term (this quarter),
+    and long-term (6-12 months).
+  expected_output: >
+    A detailed analysis document with three clearly labeled sections (Engineering,
+    Sales, Strategy), each containing categorized findings with urgency ratings and
+    supporting evidence from the scan. Include a cross-cutting "Key Patterns" section
+    highlighting the 3-5 most significant trends observed across all competitors.
+  agent: company_analyst
+
+strategic_recommendations:
+  description: >
+    Based on the competitive analysis for {company} in the {industry} industry,
+    develop strategic recommendations organized by business function:
+
+    ENGINEERING RECOMMENDATIONS:
+    - R&D investment priorities: where to increase/decrease engineering investment
+    - Product roadmap implications: features to accelerate, pivot, or deprioritize
+    - Technical architecture decisions influenced by competitive moves
+    - Build vs. buy vs. partner decisions based on competitor capabilities
+
+    SALES RECOMMENDATIONS:
+    - Competitive battle card updates: key talking points against each competitor
+    - Pricing/packaging responses to competitor moves
+    - Target segment adjustments based on competitor positioning
+    - Objection handling for new competitor capabilities
+
+    STRATEGY RECOMMENDATIONS:
+    - Market positioning adjustments
+    - Partnership or acquisition targets to close capability gaps
+    - Long-term investment thesis changes
+    - Defensive moats to strengthen
+
+    Each recommendation must cite specific competitive evidence and include:
+    expected impact (high/medium/low), implementation difficulty, and suggested
+    timeline. Prioritize by impact and feasibility.
+  expected_output: >
+    A prioritized set of 12-20 strategic recommendations organized by function
+    (Engineering, Sales, Strategy), each with a clear rationale tied to specific
+    competitive intelligence, expected impact rating, difficulty rating, and
+    suggested timeline. Include a "Top 5 Priorities" summary at the top.
+  agent: strategy_advisor
+  context:
+    - analyze_findings
+
+write_briefing:
+  description: >
+    Compile all competitive intelligence, analysis, and strategic recommendations
+    into a comprehensive weekly briefing document for {company} leadership.
+    The briefing must include these sections:
+
+    1. EXECUTIVE SUMMARY
+       - 5-7 bullet points covering the most critical developments
+       - Overall competitive threat level (elevated/stable/reduced) with rationale
+
+    2. PRODUCT & TECHNOLOGY LANDSCAPE
+       - Competitor product releases and feature updates (detailed)
+       - R&D investment signals and technology bets
+       - Capability comparison matrix where relevant
+       - Implications for {company}'s engineering roadmap
+
+    3. MARKET & BUSINESS INTELLIGENCE
+       - Pricing and packaging changes
+       - Go-to-market and sales strategy shifts
+       - Partnership and ecosystem developments
+       - Customer movement and win/loss signals
+
+    4. COMPETITOR DEEP DIVES
+       - Per-competitor section with detailed activity summary
+       - Strategic intent assessment for each competitor
+
+    5. THREAT ASSESSMENT
+       - Ranked threats with urgency level and recommended response
+       - Emerging risks to monitor
+
+    6. STRATEGIC RECOMMENDATIONS
+       - For Engineering: R&D priorities and product roadmap actions
+       - For Sales: positioning updates and competitive responses
+       - For Strategy: investment and partnership recommendations
+       - Top 5 immediate action items
+
+    7. WATCH LIST
+       - Items requiring continued monitoring next week
+       - Early signals that could become significant
+
+    Format as clean, detailed markdown. Date the report as {current_date}.
+    Be specific and detailed — include company names, product names, dates, and
+    data points rather than vague generalizations. This report should enable
+    executives to make concrete business decisions.
+  expected_output: >
+    A professional, comprehensive competitive intelligence briefing (2000+ words)
+    in markdown format with all seven sections above. Must be specific, evidence-based,
+    and actionable for Engineering, Sales, and Strategy teams.
+    Formatted as markdown without '```'.
+  agent: report_writer
+  context:
+    - analyze_findings
+    - strategic_recommendations
+  output_file: output/briefing.md

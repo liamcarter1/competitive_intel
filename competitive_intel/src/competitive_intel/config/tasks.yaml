@@ -244,6 +244,11 @@ scan_annual_report:
     data points, or named examples — not generic industry observations.
     Do NOT repeat the same finding across multiple sections.
 
+    0. EXECUTIVE SUMMARY
+       - 5-7 bullet points covering the most critical findings
+       - One-line competitive threat assessment (elevated/stable/reduced)
+       - Key number: revenue, market share, employee count
+
     1. COMPANY OVERVIEW & SCALE
        - Company type (public/private), headquarters, year founded
        - Total revenue, employee count, and number of locations/countries
@@ -251,7 +256,11 @@ scan_annual_report:
        - How their overall scale compares to {company}
 
     2. PRODUCT PORTFOLIO & POSITIONING
-       - Specific product lines and model names (not generic categories)
+       - Specific product lines with model names or series numbers
+         (e.g. pump series, valve families, actuator lines — not just
+         "hydraulic pumps")
+       - Technical specifications or performance claims that differentiate
+         their products
        - Technical differentiators and claimed advantages
        - How they position against {company} specifically
        - Product gaps relative to {company}'s offering
@@ -263,7 +272,9 @@ scan_annual_report:
        - Specific pricing moves or packaging changes in the past 12 months
 
     4. CUSTOMERS, VERTICALS & CASE STUDIES
-       - Named customers or OEM relationships (not generic segments)
+       - Named OEM customers and end-user accounts (e.g. specific
+         equipment manufacturers, not just "construction sector")
+       - Named distributor or channel partners
        - Specific case studies, testimonials, or reference projects
        - Which verticals they prioritise and any they are entering/exiting
 
@@ -331,20 +342,32 @@ scan_annual_report:
           (with concrete actions {company} could take)
         - Strategic vulnerabilities visible in their filings, website,
           or public statements
+        - Recommended actions must be specific: name target accounts,
+          product lines, geographic regions, trade shows, or sales
+          channels — not generic strategic directions like "pursue
+          growth" or "target market share"
 
     QUALITY RULES:
     - Every claim must cite a source URL inline.
-    - Do not repeat the same fact or observation in multiple sections.
+    - Cite sources as markdown hyperlinks [Source Name, Date](URL) — never
+      bare URLs. Example: [Bosch Rexroth Press Release, Feb 2024](https://...).
+    - Each finding must appear in exactly one section. If a fact is relevant
+      to multiple sections, place it in the most relevant one. Other sections
+      may cross-reference ("see Section X") but must not restate the finding.
     - If a section has no data available, write one sentence stating this
       and move on — do not pad with speculation or generic industry commentary.
     - Prefer specific names, numbers, and dates over vague statements.
     - Do not use the same source more than 3 times across the entire report —
       seek diverse sources for a well-rounded picture.
+    - Where data permits, include markdown tables for: financial trends
+      (2-3 year revenue/employee trajectory), market share rankings,
+      and product portfolio comparison vs {company}.
   expected_output: >
-    A structured intelligence report for {competitor} with all 15 sections
-    above. Requirements:
+    A structured intelligence report for {competitor} with all 16 sections
+    (0-15) above, starting with an Executive Summary. Requirements:
     - Based exclusively on the most recent available data, citing the
       date/year of each source.
+    - Sources cited as markdown hyperlinks [Name, Date](URL) — never bare URLs.
     - Each section contains specific, actionable findings — not generic
       industry observations or speculation.
     - No repetition of findings across sections.
@@ -353,6 +376,8 @@ scan_annual_report:
       press, reviews) — not the same source repeated throughout.
     - 2000+ words total, with depth concentrated in sections where real
       data is available rather than spread thin across empty sections.
+    - At least one markdown table (financial trends, market share, or
+      product portfolio comparison).
     - Written for a strategy team that needs to make decisions about how
       {company} competes with {competitor}.
   agent: annual_report_analyst
@@ -367,16 +392,10 @@ evaluate_annual_report:
     bar should pass even if imperfect.
 
     === RUBRIC ===
-    1. All 15 sections present: Company Overview & Scale, Product Portfolio &
-       Positioning, Pricing & Commercial Model, Customers Verticals & Case
-       Studies, Go-to-Market & Distribution, Product Launches R&D & Roadmap,
-       Financial Health & Trajectory, Team Hiring & Leadership, Customer
-       Sentiment & Pain Points, Market Position & Share, M&A Partnerships &
-       Strategic Moves, Geographic Presence & Expansion, Patent & Technology
-       Landscape, Regulatory Trade & Supply Chain Risks, Strategic Assessment
-    2. Specific facts, data points, and named examples — not generic industry
-       observations or speculation
-    3. Source URLs cited inline throughout the report
+    1. All 16 sections present (0-15), including Executive Summary at the top
+    2. Specific facts, data points, and named examples — not generic
+       industry observations or speculation
+    3. Sources cited as markdown hyperlinks [Name, Date](URL) — not bare URLs
     4. No repetition of the same finding across multiple sections
     5. Thin sections (no data found) stated briefly in one sentence, not
        padded with speculation or generic commentary
@@ -384,6 +403,14 @@ evaluate_annual_report:
        across the entire report
     7. 2000+ words total with depth concentrated in sections where real data
        exists rather than spread thin across empty sections
+    8. Section 2 (Product Portfolio) contains specific product model names
+       or series numbers
+    9. Section 4 (Customers) contains at least one named customer or OEM
+       relationship
+    10. Section 15 (Strategic Assessment) contains specific recommended
+        actions (named accounts, products, or regions)
+    11. At least one markdown table present (financial trends, market share,
+        or portfolio comparison)
 
     === REPORT TO EVALUATE ===
 
@@ -402,12 +429,14 @@ evaluate_annual_report:
     "missing Patent & Technology Landscape section" not "could be improved".
 
     Example pass: {{"evaluation_result": "pass", "evaluation_feedback":
-    "Report covers all 15 sections with specific facts and source URLs.
-    Good diversity of sources across filings, LinkedIn, and trade press.
-    Financial section is particularly strong with 3-year revenue trend."}}
+    "Report covers all 16 sections (0-15) with Executive Summary, specific
+    facts, and clean markdown hyperlinks. Good diversity of sources across
+    filings, LinkedIn, and trade press. Financial section includes a
+    3-year revenue table. Product Portfolio names specific model series."}}
 
     Example fail: {{"evaluation_result": "fail", "evaluation_feedback":
-    "Missing Customer Sentiment & Pain Points section entirely. Sections
-    3 and 5 repeat the same pricing data. Only 2 unique sources cited
-    across the entire report — need more diverse sourcing."}}
+    "Missing Executive Summary (Section 0). Bare URLs instead of markdown
+    hyperlinks. Section 2 says 'hydraulic pumps' without naming specific
+    model series. No markdown tables present. Sections 3 and 5 repeat
+    the same pricing data."}}
   agent: quality_evaluator

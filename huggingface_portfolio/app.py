@@ -185,34 +185,28 @@ def deep_dive(question: str, briefing_text: str) -> str:
 
 # --- Gradio UI ---
 
-danfoss_theme = gr.themes.Soft(
+teal_theme = gr.themes.Soft(
     primary_hue=gr.themes.Color(
-        c50="#fef2f2", c100="#fee2e2", c200="#fecaca", c300="#fca5a5",
-        c400="#f87171", c500="#E2000F", c600="#dc2626", c700="#b91c1c",
-        c800="#991b1b", c900="#7f1d1d", c950="#450a0a",
+        c50="#f0fdfa", c100="#ccfbf1", c200="#99f6e4", c300="#5eead4",
+        c400="#2dd4bf", c500="#0D9488", c600="#0d9488", c700="#0f766e",
+        c800="#115e59", c900="#134e4a", c950="#042f2e",
     ),
 )
 
-with gr.Blocks(title="Danfoss Power Solutions — Competitive Intelligence Monitor", theme=danfoss_theme) as app:
+with gr.Blocks(title="Competitive Intelligence Monitor", theme=teal_theme) as app:
     briefing_state = gr.State("")
 
-    gr.Image(
-        value=str(Path(__file__).parent / "Vickers_by_Danfoss-Logo.png"),
-        show_label=False,
-        height=100,
-        width=300,
-        container=False,
-    )
-    gr.Markdown("# Danfoss Power Solutions — Competitive Intelligence Monitor")
+    gr.Markdown("# Competitive Intelligence Monitor")
+    gr.Markdown("*AI-Powered Market Analysis Platform*")
     gr.Markdown("Enter a company, its industry, and key competitors to generate a strategic intelligence briefing.")
 
     with gr.Row():
-        company = gr.Textbox(label="Company Name", placeholder="e.g. Danfoss Power Solutions")
-        industry = gr.Textbox(label="Industry", placeholder="e.g. Hydraulics & Mobile Machinery")
+        company = gr.Textbox(label="Company Name", placeholder="e.g. Acme Corporation")
+        industry = gr.Textbox(label="Industry", placeholder="e.g. Enterprise Software")
 
     competitors = gr.Textbox(
         label="Competitors (comma-separated)",
-        placeholder="e.g. Parker Hannifin, Bosch Rexroth, Eaton Hydraulics",
+        placeholder="e.g. Globex Inc, Initech, Umbrella Corp",
     )
 
     generate_btn = gr.Button("Generate Briefing", variant="primary")
@@ -259,7 +253,7 @@ with gr.Blocks(title="Danfoss Power Solutions — Competitive Intelligence Monit
     chatbot = gr.Chatbot(label="Briefing Q&A", height=400, type="messages")
     chat_input = gr.Textbox(
         label="Your question",
-        placeholder="e.g. What are the key product changes from Parker this quarter?",
+        placeholder="e.g. What are the key product changes from competitors this quarter?",
         lines=2,
     )
 
