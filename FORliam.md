@@ -120,6 +120,24 @@ A few design decisions worth understanding:
 
 This pattern — LLM-as-judge with conditional routing — is reusable. Any time you have an LLM producing structured output that must meet a spec, you can slot in an evaluator node that checks the spec and loops back with feedback. The key ingredients: a rubric (what "good" looks like), a JSON verdict format, fail-open defaults, and a retry cap.
 
+### The Annual Report Evaluator: Same Pattern, Different Topology
+
+The annual report pipeline also has an evaluator — but it works differently because of how the pipeline is structured.
+
+In the main briefing pipeline, evaluation is a **graph-level node**. The graph goes `analyze → recommend → evaluate → write_briefing`, and the evaluate node can route back to retry either upstream node. This works because those nodes run sequentially — there's one analysis and one set of recommendations to check.
+
+The annual report pipeline is different. It uses `Send()` fan-out: each competitor gets its own parallel `scan_annual_report` branch, and all branches converge after that single node. If you added a graph-level evaluate node, it would run once after *all* scans complete and would have to evaluate all reports in a single pass — losing the ability to retry individual competitors. Imagine a quality inspector at the end of a factory line who can only reject the entire batch, not individual items.
+
+So instead, the annual report evaluation happens **inline** — inside `scan_annual_report()` itself. After the LLM generates a competitor report, the same function immediately evaluates it against a rubric (all 15 sections present? specific facts cited? diverse sources?). If it fails, the function retries the LLM call with the feedback appended — all within the same function invocation. Each parallel branch independently evaluates and retries its own report, without affecting the others.
+
+The key differences from the graph-level approach:
+- **No new graph nodes or edges** — the evaluation loop is a Python `for` loop inside the existing node function
+- **Per-competitor retries** — if Competitor A's report fails but Competitor B's passes, only A retries
+- **Web searches not re-run** — retries re-invoke only the LLM with the same search context plus feedback. The Serper results don't change between attempts, and re-fetching them would waste time and API credits
+- **Same retry cap (2)** and **same fail-open behavior** as the main pipeline — consistency makes the system easier to reason about
+
+This is a useful pattern to remember: **when your pipeline uses fan-out parallelism, quality gates must live inside the parallel branches, not after convergence**. A graph-level evaluator after fan-in would lose per-item granularity. Inline evaluation preserves it.
+
 ---
 
 ## Bugs We Hit and How We Fixed Them
