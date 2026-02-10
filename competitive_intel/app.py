@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import warnings
 from datetime import datetime
 from pathlib import Path
@@ -11,16 +12,102 @@ os.environ.pop("LANGSMITH_TRACING", None)
 os.environ.pop("LANGCHAIN_TRACING_V2", None)
 
 import gradio as gr
+import markdown as md_lib
 from anthropic import Anthropic
+from fpdf import FPDF
 from openai import OpenAI
 
-from competitive_intel.graph import run_pipeline
+from competitive_intel.graph import run_pipeline, run_annual_report_pipeline
 
 OUTPUT_DIR = Path(__file__).parent / "output"
 OUTPUT_DIR.mkdir(exist_ok=True)
 
 openai_client = OpenAI()
 anthropic_client = Anthropic()
+
+
+LOGO_PATH = Path(__file__).parent / "Vickers_by_Danfoss-Logo.png"
+FONT_DIR = Path(__file__).parent / "fonts"
+DANFOSS_RED = (226, 0, 15)
+DANFOSS_DARK = (50, 50, 50)
+DANFOSS_GREY = (120, 120, 120)
+
+
+def _markdown_to_pdf(md_text: str, output_path: Path) -> Path:
+    from fpdf.fonts import TextStyle
+
+    html = md_lib.markdown(md_text, extensions=["tables", "fenced_code"])
+    html = re.sub(r"!\[.*?\]\(.*?\)", "", html)
+    # Convert bare URLs (not already inside href="") into clickable links
+    html = re.sub(
+        r'(?<!href=")(https?://[^\s<)\]]+)',
+        r'<a href="\1">\1</a>',
+        html,
+    )
+    # Decode HTML entities in headings before title-casing so &amp; becomes &
+    import html as html_lib
+    def _title_case_heading(match):
+        tag = match.group(1)
+        content = match.group(2)
+        # Decode HTML entities first (e.g. &amp; -> &)
+        decoded = html_lib.unescape(content)
+        # Strip any inner HTML tags for the uppercase check
+        plain = re.sub(r"<[^>]+>", "", decoded)
+        if sum(1 for c in plain if c.isupper()) > len(plain) * 0.5:
+            decoded = decoded.title()
+        return f"<{tag}>{decoded}</{tag}>"
+    html = re.sub(r"<(h[1-6])>(.*?)</\1>", _title_case_heading, html)
+
+    pdf = FPDF()
+    pdf.set_auto_page_break(auto=True, margin=20)
+    pdf.set_margin(20)
+
+    # Register fonts
+    if FONT_DIR.exists():
+        pdf.add_font("report", "", str(FONT_DIR / "DejaVuSans.ttf"), uni=True)
+        pdf.add_font("report", "B", str(FONT_DIR / "DejaVuSans-Bold.ttf"), uni=True)
+        pdf.add_font("report", "I", str(FONT_DIR / "DejaVuSans-Oblique.ttf"), uni=True)
+        pdf.add_font("report", "BI", str(FONT_DIR / "DejaVuSans-BoldOblique.ttf"), uni=True)
+        font = "report"
+    else:
+        font = "Helvetica"
+
+    tag_styles = {
+        "h1": TextStyle(font_family=font, font_style="B", font_size_pt=18,
+                        color=DANFOSS_RED, t_margin=12, b_margin=4),
+        "h2": TextStyle(font_family=font, font_style="B", font_size_pt=14,
+                        color=DANFOSS_DARK, t_margin=10, b_margin=3),
+        "h3": TextStyle(font_family=font, font_style="B", font_size_pt=12,
+                        color=DANFOSS_DARK, t_margin=8, b_margin=2),
+        "h4": TextStyle(font_family=font, font_style="B", font_size_pt=10,
+                        color=DANFOSS_DARK, t_margin=6, b_margin=2),
+        "p": TextStyle(font_family=font, font_size_pt=9,
+                       color=DANFOSS_DARK, b_margin=3),
+        "li": TextStyle(font_family=font, font_size_pt=9,
+                        color=DANFOSS_DARK),
+        "a": TextStyle(font_family=font, font_size_pt=9,
+                       color=(0, 80, 160)),
+        "strong": TextStyle(font_family=font, font_style="B", font_size_pt=9,
+                            color=DANFOSS_DARK),
+        "em": TextStyle(font_family=font, font_style="I", font_size_pt=9,
+                        color=DANFOSS_GREY),
+    }
+
+    # First page with logo and header
+    pdf.add_page()
+    logo_h = 20
+    if LOGO_PATH.exists():
+        pdf.image(str(LOGO_PATH), x=20, y=10, h=logo_h)
+    line_y = 10 + logo_h + 3
+    pdf.set_draw_color(*DANFOSS_RED)
+    pdf.set_line_width(0.8)
+    pdf.line(20, line_y, pdf.w - 20, line_y)
+    pdf.set_y(line_y + 4)
+
+    pdf.set_font(font, size=9)
+    pdf.write_html(html, tag_styles=tag_styles, li_prefix_color=DANFOSS_RED)
+    pdf.output(str(output_path))
+    return output_path
 
 QUICK_CHAT_SYSTEM = """You are a competitive intelligence analyst assistant. You answer questions
 about a competitive intelligence briefing report that was generated for the user.
@@ -199,8 +286,8 @@ with gr.Blocks(title="Danfoss Power Solutions — Competitive Intelligence Monit
     gr.Image(
         value=str(Path(__file__).parent / "Vickers_by_Danfoss-Logo.png"),
         show_label=False,
-        height=80,
-        width=200,
+        height=100,
+        width=300,
         container=False,
     )
     gr.Markdown("# Danfoss Power Solutions — Competitive Intelligence Monitor")
@@ -212,34 +299,159 @@ with gr.Blocks(title="Danfoss Power Solutions — Competitive Intelligence Monit
 
     competitors = gr.Textbox(
         label="Competitors (comma-separated)",
-        placeholder="e.g. Parker Hannifin, Bosch Rexroth, Eaton Hydraulics",
+        placeholder="e.g. Parker Hannifin, Bosch Rexroth, ATOS",
     )
 
-    generate_btn = gr.Button("Generate Briefing", variant="primary")
-    status = gr.Markdown("*Ready to generate.*")
+    gr.Markdown("---")
+    gr.Markdown(
+        "### Two independent pipelines — run either or both at the same time\n\n"
+        "Both pipelines use the company, industry, and competitors entered above. "
+        "They search different sources and produce separate reports, so you can launch them concurrently."
+    )
+
+    with gr.Row(equal_height=True):
+        with gr.Column():
+            gr.Markdown(
+                "#### Competitive Briefing\n"
+                "Scans recent news, product launches, pricing changes, and market moves. "
+                "Produces an executive-ready weekly intelligence briefing with strategic recommendations."
+            )
+            generate_btn = gr.Button("Generate Briefing", variant="primary", size="lg")
+            status = gr.Markdown("*Ready to generate.*")
+
+        with gr.Column():
+            gr.Markdown(
+                "#### Annual Report Deep Dive\n"
+                "Analyses the latest annual reports, SEC filings, financial health, market share, "
+                "M&A activity, patents, hiring, customer reviews, and exploitable weaknesses. "
+                "Covers 15 strategic focus areas per competitor."
+            )
+            annual_btn = gr.Button("Run Annual Report Analysis", variant="primary", size="lg")
+            annual_status = gr.Markdown("*Ready to run.*")
+
+    # --- Briefing Output ---
+    gr.Markdown("---")
+    gr.Markdown("### Competitive Briefing Output")
     output = gr.Markdown(label="Briefing Output")
+    briefing_pdf_btn = gr.Button("Download Briefing as PDF", variant="secondary", visible=False)
+    briefing_pdf_file = gr.File(label="Briefing PDF", visible=False)
 
     def on_generate(company, industry, competitors):
-        yield {status: "*Generating briefing — this may take several minutes...*", output: "", briefing_state: ""}
+        yield {
+            status: "*Generating briefing — this may take several minutes...*",
+            output: "", briefing_state: "",
+            briefing_pdf_btn: gr.update(visible=False),
+            briefing_pdf_file: gr.update(visible=False, value=None),
+        }
         try:
             result = run_briefing(company, industry, competitors)
-            yield {status: "*Briefing complete!*", output: result, briefing_state: result}
+            yield {
+                status: "*Briefing complete!*",
+                output: result, briefing_state: result,
+                briefing_pdf_btn: gr.update(visible=True),
+                briefing_pdf_file: gr.update(visible=False, value=None),
+            }
         except Exception as e:
             import traceback
             tb = traceback.format_exc()
             log_path = OUTPUT_DIR / "error.log"
             log_path.write_text(tb, encoding="utf-8")
-            yield {status: f"*Error: {e}*", output: f"Full traceback written to {log_path}", briefing_state: ""}
+            yield {
+                status: f"*Error: {e}*",
+                output: f"Full traceback written to {log_path}", briefing_state: "",
+                briefing_pdf_btn: gr.update(visible=False),
+                briefing_pdf_file: gr.update(visible=False, value=None),
+            }
 
     generate_btn.click(
         fn=on_generate,
         inputs=[company, industry, competitors],
-        outputs=[status, output, briefing_state],
+        outputs=[status, output, briefing_state, briefing_pdf_btn, briefing_pdf_file],
     )
 
+    def on_briefing_pdf(briefing_text):
+        if not briefing_text:
+            return gr.update(visible=False, value=None)
+        path = _markdown_to_pdf(briefing_text, OUTPUT_DIR / "briefing.pdf")
+        return gr.update(visible=True, value=str(path))
+
+    briefing_pdf_btn.click(
+        fn=on_briefing_pdf,
+        inputs=[briefing_state],
+        outputs=[briefing_pdf_file],
+    )
+
+    # --- Annual Report Output ---
+    gr.Markdown("---")
+    gr.Markdown("### Annual Report Deep Dive Output")
+    annual_output = gr.Markdown(label="Annual Report Analysis")
+    annual_pdf_btn = gr.Button("Download Annual Report as PDF", variant="secondary", visible=False)
+    annual_pdf_file = gr.File(label="Annual Report PDF", visible=False)
+
+    annual_report_state = gr.State("")
+
+    def run_annual_report_analysis(company, industry, competitors):
+        if not company or not industry or not competitors:
+            yield {
+                annual_status: "*Please fill in all fields above.*",
+                annual_output: "", annual_report_state: "",
+                annual_pdf_btn: gr.update(visible=False),
+                annual_pdf_file: gr.update(visible=False, value=None),
+            }
+            return
+        yield {
+            annual_status: "*Running annual report deep dive — this may take several minutes...*",
+            annual_output: "", annual_report_state: "",
+            annual_pdf_btn: gr.update(visible=False),
+            annual_pdf_file: gr.update(visible=False, value=None),
+        }
+        try:
+            result = run_annual_report_pipeline(
+                company=company.strip(),
+                industry=industry.strip(),
+                competitors=competitors.strip(),
+            )
+            yield {
+                annual_status: "*Annual report analysis complete!*",
+                annual_output: result, annual_report_state: result,
+                annual_pdf_btn: gr.update(visible=True),
+                annual_pdf_file: gr.update(visible=False, value=None),
+            }
+        except Exception as e:
+            import traceback
+            tb = traceback.format_exc()
+            log_path = OUTPUT_DIR / "annual_report_error.log"
+            log_path.write_text(tb, encoding="utf-8")
+            yield {
+                annual_status: f"*Error: {e}*",
+                annual_output: f"Full traceback written to {log_path}",
+                annual_report_state: "",
+                annual_pdf_btn: gr.update(visible=False),
+                annual_pdf_file: gr.update(visible=False, value=None),
+            }
+
+    annual_btn.click(
+        fn=run_annual_report_analysis,
+        inputs=[company, industry, competitors],
+        outputs=[annual_status, annual_output, annual_report_state, annual_pdf_btn, annual_pdf_file],
+    )
+
+    def on_annual_pdf(report_text):
+        if not report_text:
+            return gr.update(visible=False, value=None)
+        path = _markdown_to_pdf(report_text, OUTPUT_DIR / "annual_report_analysis.pdf")
+        return gr.update(visible=True, value=str(path))
+
+    annual_pdf_btn.click(
+        fn=on_annual_pdf,
+        inputs=[annual_report_state],
+        outputs=[annual_pdf_file],
+    )
+
+    # --- Previous Reports ---
     gr.Markdown("---")
     gr.Markdown("## Previous Reports")
-    report_btn = gr.Button("Load Latest Report")
+    report_btn = gr.Button("Load Latest Briefing")
     report_output = gr.Markdown()
 
     def on_load_report():

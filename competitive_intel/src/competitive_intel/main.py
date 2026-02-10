@@ -1,6 +1,10 @@
 #!/usr/bin/env python
+import os
 from dotenv import load_dotenv
 load_dotenv()
+
+os.environ.pop("LANGSMITH_TRACING", None)
+os.environ.pop("LANGCHAIN_TRACING_V2", None)
 
 from competitive_intel.graph import run_pipeline
 
