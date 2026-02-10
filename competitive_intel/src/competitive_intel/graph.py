@@ -436,8 +436,58 @@ def scan_annual_report(state: AnnualReportState) -> dict:
         {"role": "system", "content": system},
         {"role": "user", "content": user_msg},
     ])
-    print(f"[scan_annual_report] Finished {competitor} (claude-sonnet)")
-    return {"report_results": [f"# {competitor}\n\n{response.content}"]}
+    report_text = response.content
+
+    # Inline evaluation + retry loop
+    for attempt in range(MAX_RETRIES + 1):
+        eval_inputs = {**inputs, "report_text": report_text}
+        eval_system = _agent_system_prompt("quality_evaluator", eval_inputs)
+        eval_desc, eval_expected = _task_prompt("evaluate_annual_report", eval_inputs)
+
+        print(f"[scan_annual_report] Evaluating {competitor} (attempt {attempt + 1}/{MAX_RETRIES + 1})...")
+        eval_response = _claude().invoke([
+            {"role": "system", "content": eval_system},
+            {"role": "user", "content": f"{eval_desc}\n\n{eval_expected}"},
+        ])
+
+        raw = eval_response.content.strip()
+        try:
+            parsed = json.loads(raw)
+            result = parsed.get("evaluation_result", "pass")
+            feedback = parsed.get("evaluation_feedback", "")
+        except (json.JSONDecodeError, AttributeError):
+            print(f"[scan_annual_report] WARNING: Could not parse evaluator JSON for {competitor}, defaulting to pass. Raw: {raw[:200]}")
+            result = "pass"
+            feedback = ""
+
+        if result not in ("pass", "fail"):
+            print(f"[scan_annual_report] WARNING: Unknown evaluation_result '{result}' for {competitor}, defaulting to pass")
+            result = "pass"
+
+        print(f"[scan_annual_report] {competitor} evaluation result: {result}")
+
+        if result == "pass":
+            break
+
+        if attempt < MAX_RETRIES:
+            print(f"[scan_annual_report] Retrying {competitor} with feedback (retry {attempt + 1}/{MAX_RETRIES})")
+            retry_msg = (
+                f"{user_msg}\n\n"
+                f"---\n"
+                f"FEEDBACK FROM QUALITY REVIEW (address these issues in your revised report):\n"
+                f"{feedback}\n"
+                f"Please revise your report to address the feedback above."
+            )
+            response = llm.invoke([
+                {"role": "system", "content": system},
+                {"role": "user", "content": retry_msg},
+            ])
+            report_text = response.content
+        else:
+            print(f"[scan_annual_report] WARNING: Max retries exhausted for {competitor}. Proceeding with current report.")
+
+    print(f"[scan_annual_report] Finished {competitor} (claude-sonnet, retries={attempt})")
+    return {"report_results": [f"# {competitor}\n\n{report_text}"]}
 
 
 def fan_out_annual_reports(state: AnnualReportState) -> list[Send]:

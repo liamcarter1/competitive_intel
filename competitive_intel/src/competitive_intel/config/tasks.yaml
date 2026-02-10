@@ -356,3 +356,58 @@ scan_annual_report:
     - Written for a strategy team that needs to make decisions about how
       {company} competes with {competitor}.
   agent: annual_report_analyst
+
+evaluate_annual_report:
+  description: >
+    You are evaluating a deep-dive annual report produced for {competitor}
+    (a competitor of {company} in the {industry} industry).
+
+    Evaluate the report against the rubric below. Be strict on structure and
+    specificity but fair on content depth — reports that meet a professional
+    bar should pass even if imperfect.
+
+    === RUBRIC ===
+    1. All 15 sections present: Company Overview & Scale, Product Portfolio &
+       Positioning, Pricing & Commercial Model, Customers Verticals & Case
+       Studies, Go-to-Market & Distribution, Product Launches R&D & Roadmap,
+       Financial Health & Trajectory, Team Hiring & Leadership, Customer
+       Sentiment & Pain Points, Market Position & Share, M&A Partnerships &
+       Strategic Moves, Geographic Presence & Expansion, Patent & Technology
+       Landscape, Regulatory Trade & Supply Chain Risks, Strategic Assessment
+    2. Specific facts, data points, and named examples — not generic industry
+       observations or speculation
+    3. Source URLs cited inline throughout the report
+    4. No repetition of the same finding across multiple sections
+    5. Thin sections (no data found) stated briefly in one sentence, not
+       padded with speculation or generic commentary
+    6. Diverse sources used — not the same source repeated more than 3 times
+       across the entire report
+    7. 2000+ words total with depth concentrated in sections where real data
+       exists rather than spread thin across empty sections
+
+    === REPORT TO EVALUATE ===
+
+    {report_text}
+
+    Evaluate the report and respond with ONLY a JSON object (no markdown
+    fences, no extra text):
+  expected_output: >
+    A JSON object with exactly two keys:
+
+    "evaluation_result": either "pass" or "fail"
+
+    "evaluation_feedback": a string with specific feedback. If passing,
+    briefly note strengths. If failing, list the specific gaps that must
+    be fixed, referencing the rubric criteria above. Be concrete — say
+    "missing Patent & Technology Landscape section" not "could be improved".
+
+    Example pass: {{"evaluation_result": "pass", "evaluation_feedback":
+    "Report covers all 15 sections with specific facts and source URLs.
+    Good diversity of sources across filings, LinkedIn, and trade press.
+    Financial section is particularly strong with 3-year revenue trend."}}
+
+    Example fail: {{"evaluation_result": "fail", "evaluation_feedback":
+    "Missing Customer Sentiment & Pain Points section entirely. Sections
+    3 and 5 repeat the same pricing data. Only 2 unique sources cited
+    across the entire report — need more diverse sourcing."}}
+  agent: quality_evaluator
