@@ -23,17 +23,33 @@ competitive_intel/
         └── __init__.py             # search_serper() function for web search
 ```
 
-### Pipeline Graph
+### Briefing Pipeline Graph
 
 ```
                     ┌─ scan(competitor_A) ─┐
-User Input ──→ fan_out ─→ scan(competitor_B) ─→ fan_in ──→ analyze ──→ recommend ──→ write_briefing
-                    └─ scan(competitor_C) ─┘
+User Input ──→ fan_out ─→ scan(competitor_B) ─→ fan_in ──→ analyze ──→ recommend ──→ evaluate ─── pass ──→ write_briefing
+                    └─ scan(competitor_C) ─┘                ↑            ↑              │
+                                                           │            │              ├─ fail_analysis ──→ retry
+                                                           │            │              └─ fail_recs ──→ retry
+                                                           └────────────└──────────────────────────┘
 ```
 
 - **Fan-out**: Parallel scan nodes (one per competitor), each calling Serper API then summarizing with GPT-4o
 - **Fan-in**: Aggregates all scan results into shared state
-- **Sequential**: analyze (Claude Sonnet) → recommend (Claude Sonnet) → write_briefing (GPT-4o-mini)
+- **Sequential**: analyze (Claude Sonnet) → recommend (Claude Sonnet) → evaluate (Claude Sonnet) → write_briefing (GPT-4o-mini)
+- **Quality gate**: The evaluate node checks analysis and recommendations against rubrics. Failures route back to retry the failing node with feedback. Max 2 retries per node.
+
+### Annual Report Pipeline Graph
+
+```
+                              ┌─ scan_annual_report(competitor_A) [+ inline evaluate + retry] ─┐
+User Input ──→ fan_out_annual ─→ scan_annual_report(competitor_B) [+ inline evaluate + retry] ─→ combine results
+                              └─ scan_annual_report(competitor_C) [+ inline evaluate + retry] ─┘
+```
+
+- **Fan-out**: Parallel deep-dive report nodes (one per competitor), each running 15 Serper searches then synthesizing with Claude Sonnet
+- **Inline evaluation**: Each branch evaluates its own report against a quality rubric and retries up to 2 times with feedback (evaluation happens inside the node, not as a separate graph node, to preserve per-competitor granularity)
+- **Output**: Combined markdown report saved to `output/annual_report_analysis.md`
 
 ### Key Components
 
@@ -126,6 +142,9 @@ uv run competitive_intel   # Run the CLI pipeline
 - Scan nodes: GPT-4o (reliable for search result summarization)
 - Analyze node: Claude Sonnet (better analytical reasoning)
 - Recommend node: Claude Sonnet (better strategic synthesis)
+- Evaluate node: Claude Sonnet (rubric-based quality judgment)
+- Annual report scan nodes: Claude Sonnet (deep analytical synthesis from 15 searches)
+- Annual report inline evaluator: Claude Sonnet (same quality gate, runs inside each parallel branch)
 - Write briefing node: GPT-4o-mini (cost-effective for formatting)
 - Quick chat: GPT-4o-mini with low temperature (0.1)
 - Deep-dive synthesis: Claude 3.5 Sonnet with low temperature (0.1)
