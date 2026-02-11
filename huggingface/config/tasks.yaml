@@ -150,3 +150,293 @@ write_briefing:
     - analyze_findings
     - strategic_recommendations
   output_file: output/briefing.md
+
+evaluate_quality:
+  description: >
+    You are evaluating two competitive intelligence deliverables produced for
+    {company} in the {industry} industry (competitors: {competitors}).
+
+    Evaluate each deliverable against its rubric below. Be strict on structure
+    and specificity but fair on content depth — outputs that meet a professional
+    bar should pass even if imperfect.
+
+    === ANALYSIS RUBRIC ===
+    The analysis MUST contain:
+    1. Three clearly labeled audience sections: Engineering, Sales, and Strategy
+    2. Urgency ratings (immediate / short-term / long-term) on findings
+    3. Specific evidence from the scan (competitor names, product names, dates)
+    4. A cross-cutting "Key Patterns" section with 3-5 significant trends
+
+    Fail the analysis if any of these are missing or if the content is mostly
+    generic industry observations without competitor-specific evidence.
+
+    === RECOMMENDATIONS RUBRIC ===
+    The recommendations MUST contain:
+    1. 12-20 recommendations organized by function (Engineering, Sales, Strategy)
+    2. Each recommendation cites specific competitive evidence
+    3. Each recommendation has impact rating, difficulty rating, and timeline
+    4. A "Top 5 Priorities" summary at the top
+
+    Fail the recommendations if there are fewer than 12 recommendations, if
+    the function organization is missing, if ratings/timelines are absent from
+    most recommendations, or if the Top 5 Priorities section is missing.
+
+    === CROSS-CUTTING CHECKS ===
+    - Named competitors, specific products, and dates should appear throughout
+    - Claims should be backed by evidence, not vague assertions
+    - Recommendations should be actionable (a team could act on them next quarter)
+
+    === DELIVERABLES TO EVALUATE ===
+
+    ANALYSIS:
+    {analysis}
+
+    RECOMMENDATIONS:
+    {recommendations}
+
+    Evaluate each deliverable and respond with ONLY a JSON object (no markdown
+    fences, no extra text):
+  expected_output: >
+    A JSON object with exactly two keys:
+
+    "evaluation_result": one of "pass", "fail_analysis", "fail_recommendations",
+    or "fail_both"
+
+    "evaluation_feedback": a string with specific feedback. If passing, briefly
+    note strengths. If failing, list the specific gaps that must be fixed,
+    referencing the rubric criteria above. Be concrete — say "missing Key
+    Patterns section" not "could be improved".
+
+    Example pass: {{"evaluation_result": "pass", "evaluation_feedback": "Both
+    deliverables meet the rubric. Analysis covers all three audiences with
+    urgency ratings and a strong Key Patterns section. Recommendations include
+    16 items with proper ratings and a clear Top 5."}}
+
+    Example fail: {{"evaluation_result": "fail_recommendations",
+    "evaluation_feedback": "Recommendations has only 9 items (minimum 12).
+    Missing Top 5 Priorities section. Engineering recommendations lack
+    difficulty ratings and timelines."}}
+  agent: quality_evaluator
+
+scan_annual_report:
+  description: >
+    Conduct a deep-dive investigation into {competitor} in the {industry}
+    industry as of {current_date}.
+
+    SOURCE PRIORITY (use in this order):
+    1. Latest annual report on record (if none for the current year, use
+       the most recent prior year — this is expected early in a calendar year)
+    2. Most recent SEC filings (10-K, 10-Q) and investor relations materials
+    3. The competitor's own website — product pages, about/company pages,
+       press releases, case studies, and any financial information published
+       there. This is critical for private companies without public filings.
+    4. LinkedIn company page (team size, hiring, employee count)
+    5. Industry trade press and specialist publications covering {industry}
+    6. Customer review sites (G2, Capterra, Trustpilot)
+    7. Patent databases
+
+    DISAMBIGUATION: {competitor} is a {industry} company competing with
+    {company}. Ignore search results about unrelated companies with
+    similar names in other industries. If you cannot confidently attribute
+    a finding to the correct {competitor}, do not include it.
+
+    Analyze the following areas. Each section MUST contain specific facts,
+    data points, or named examples — not generic industry observations.
+    Do NOT repeat the same finding across multiple sections.
+
+    0. EXECUTIVE SUMMARY
+       - 5-7 bullet points covering the most critical findings
+       - One-line competitive threat assessment (elevated/stable/reduced)
+       - Key number: revenue, market share, employee count
+
+    1. COMPANY OVERVIEW & SCALE
+       - Company type (public/private), headquarters, year founded
+       - Total revenue, employee count, and number of locations/countries
+       - Parent company or ownership structure if applicable
+       - How their overall scale compares to {company}
+
+    2. PRODUCT PORTFOLIO & POSITIONING
+       - Specific product lines with model names or series numbers
+         (e.g. pump series, valve families, actuator lines — not just
+         "hydraulic pumps")
+       - Technical specifications or performance claims that differentiate
+         their products
+       - Technical differentiators and claimed advantages
+       - How they position against {company} specifically
+       - Product gaps relative to {company}'s offering
+
+    3. PRICING & COMMERCIAL MODEL
+       - Pricing approach (premium, value, cost-leader) with evidence
+       - Revenue mix if known (products vs services vs aftermarket)
+       - Margin data from filings if available
+       - Specific pricing moves or packaging changes in the past 12 months
+
+    4. CUSTOMERS, VERTICALS & CASE STUDIES
+       - Named OEM customers and end-user accounts (e.g. specific
+         equipment manufacturers, not just "construction sector")
+       - Named distributor or channel partners
+       - Specific case studies, testimonials, or reference projects
+       - Which verticals they prioritise and any they are entering/exiting
+
+    5. GO-TO-MARKET & DISTRIBUTION
+       - Sales model (direct, distributor, hybrid) with named partners
+       - Geographic sales coverage and key markets
+       - Online/digital sales channels
+       - Trade show presence and marketing approach
+
+    6. PRODUCT LAUNCHES, R&D & ROADMAP
+       - Specific new products or features launched in the past 12-18 months
+       - R&D spend (absolute or as % of revenue) from filings
+       - Forward-looking statements or roadmap signals from earnings calls
+       - Technology areas they are investing in
+
+    7. FINANCIAL HEALTH & TRAJECTORY
+       - Revenue trend (at least 2 years if available)
+       - Profitability (operating margin, net income)
+       - Cash position, debt levels, and credit ratings
+       - Guidance or outlook statements
+       - For private companies: use website claims, press releases,
+         employee count trends, and office expansions as proxy indicators
+
+    8. TEAM, HIRING & LEADERSHIP
+       - Current employee count (LinkedIn or filings)
+       - Key leadership names and recent C-suite changes
+       - Hiring trends — specific roles and departments growing
+       - Layoffs or restructuring if applicable
+
+    9. CUSTOMER SENTIMENT & PAIN POINTS
+       - Specific positive and negative reviews with quotes where possible
+       - Common praise themes and common complaint themes
+       - Overall rating scores from review platforms
+       - Support/service quality signals
+
+    10. MARKET POSITION & SHARE
+        - Market share estimates with cited source and year
+        - Ranking relative to {company} and other major players
+        - Segments where they are gaining or losing ground
+
+    11. M&A, PARTNERSHIPS & STRATEGIC MOVES
+        - Specific acquisitions, mergers, JVs, or divestments with dates
+        - Named strategic partnerships or alliances
+        - What these moves signal about their strategy
+
+    12. GEOGRAPHIC PRESENCE & EXPANSION
+        - Revenue split by region if available from filings
+        - Countries or regions where they have facilities or offices
+        - Recent geographic expansion or retreat moves
+
+    13. PATENT & TECHNOLOGY LANDSCAPE
+        - Specific recent patent titles or numbers
+        - Technology areas being patented
+        - IP moats they are building
+
+    14. REGULATORY, TRADE & SUPPLY CHAIN RISKS
+        - Specific tariff or trade restriction exposure
+        - Named regulatory actions or compliance issues
+        - Supply chain dependencies or vulnerabilities
+
+    15. STRATEGIC ASSESSMENT FOR {company}
+        - Specific strengths of {competitor} that {company} would struggle
+          to replicate (these are {competitor}'s advantages, not ours)
+        - Specific weaknesses of {competitor} that {company} can exploit
+          (with concrete actions {company} could take)
+        - Strategic vulnerabilities visible in their filings, website,
+          or public statements
+        - Recommended actions must be specific: name target accounts,
+          product lines, geographic regions, trade shows, or sales
+          channels — not generic strategic directions like "pursue
+          growth" or "target market share"
+
+    QUALITY RULES:
+    - Every claim must cite a source URL inline.
+    - Cite sources as markdown hyperlinks [Source Name, Date](URL) — never
+      bare URLs. Example: [Bosch Rexroth Press Release, Feb 2024](https://...).
+    - Each finding must appear in exactly one section. If a fact is relevant
+      to multiple sections, place it in the most relevant one. Other sections
+      may cross-reference ("see Section X") but must not restate the finding.
+    - If a section has no data available, write one sentence stating this
+      and move on — do not pad with speculation or generic industry commentary.
+    - Prefer specific names, numbers, and dates over vague statements.
+    - Do not use the same source more than 3 times across the entire report —
+      seek diverse sources for a well-rounded picture.
+    - Where data permits, include markdown tables for: financial trends
+      (2-3 year revenue/employee trajectory), market share rankings,
+      and product portfolio comparison vs {company}.
+  expected_output: >
+    A structured intelligence report for {competitor} with all 16 sections
+    (0-15) above, starting with an Executive Summary. Requirements:
+    - Based exclusively on the most recent available data, citing the
+      date/year of each source.
+    - Sources cited as markdown hyperlinks [Name, Date](URL) — never bare URLs.
+    - Each section contains specific, actionable findings — not generic
+      industry observations or speculation.
+    - No repetition of findings across sections.
+    - Thin sections (no data found) are kept to one sentence, not padded.
+    - Diverse sources cited (company website, filings, LinkedIn, trade
+      press, reviews) — not the same source repeated throughout.
+    - 2000+ words total, with depth concentrated in sections where real
+      data is available rather than spread thin across empty sections.
+    - At least one markdown table (financial trends, market share, or
+      product portfolio comparison).
+    - Written for a strategy team that needs to make decisions about how
+      {company} competes with {competitor}.
+  agent: annual_report_analyst
+
+evaluate_annual_report:
+  description: >
+    You are evaluating a deep-dive annual report produced for {competitor}
+    (a competitor of {company} in the {industry} industry).
+
+    Evaluate the report against the rubric below. Be strict on structure and
+    specificity but fair on content depth — reports that meet a professional
+    bar should pass even if imperfect.
+
+    === RUBRIC ===
+    1. All 16 sections present (0-15), including Executive Summary at the top
+    2. Specific facts, data points, and named examples — not generic
+       industry observations or speculation
+    3. Sources cited as markdown hyperlinks [Name, Date](URL) — not bare URLs
+    4. No repetition of the same finding across multiple sections
+    5. Thin sections (no data found) stated briefly in one sentence, not
+       padded with speculation or generic commentary
+    6. Diverse sources used — not the same source repeated more than 3 times
+       across the entire report
+    7. 2000+ words total with depth concentrated in sections where real data
+       exists rather than spread thin across empty sections
+    8. Section 2 (Product Portfolio) contains specific product model names
+       or series numbers
+    9. Section 4 (Customers) contains at least one named customer or OEM
+       relationship
+    10. Section 15 (Strategic Assessment) contains specific recommended
+        actions (named accounts, products, or regions)
+    11. At least one markdown table present (financial trends, market share,
+        or portfolio comparison)
+
+    === REPORT TO EVALUATE ===
+
+    {report_text}
+
+    Evaluate the report and respond with ONLY a JSON object (no markdown
+    fences, no extra text):
+  expected_output: >
+    A JSON object with exactly two keys:
+
+    "evaluation_result": either "pass" or "fail"
+
+    "evaluation_feedback": a string with specific feedback. If passing,
+    briefly note strengths. If failing, list the specific gaps that must
+    be fixed, referencing the rubric criteria above. Be concrete — say
+    "missing Patent & Technology Landscape section" not "could be improved".
+
+    Example pass: {{"evaluation_result": "pass", "evaluation_feedback":
+    "Report covers all 16 sections (0-15) with Executive Summary, specific
+    facts, and clean markdown hyperlinks. Good diversity of sources across
+    filings, LinkedIn, and trade press. Financial section includes a
+    3-year revenue table. Product Portfolio names specific model series."}}
+
+    Example fail: {{"evaluation_result": "fail", "evaluation_feedback":
+    "Missing Executive Summary (Section 0). Bare URLs instead of markdown
+    hyperlinks. Section 2 says 'hydraulic pumps' without naming specific
+    model series. No markdown tables present. Sections 3 and 5 repeat
+    the same pricing data."}}
+  agent: quality_evaluator

@@ -2,8 +2,10 @@ import json
 import os
 import re
 import warnings
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
+from collections import defaultdict
+from threading import Lock
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -25,12 +27,48 @@ OUTPUT_DIR.mkdir(exist_ok=True)
 openai_client = OpenAI()
 anthropic_client = Anthropic()
 
+# Rate limiting configuration
+RATE_LIMIT_CHAT = 10  # Max quick chats per hour per IP
+RATE_LIMIT_DEEPDIVE = 3  # Max deep-dives per hour per IP
+rate_limit_store = defaultdict(lambda: {"chat": [], "deepdive": []})
+rate_limit_lock = Lock()
+
 
 LOGO_PATH = Path(__file__).parent / "Vickers_by_Danfoss-Logo.png"
 FONT_DIR = Path(__file__).parent / "fonts"
 DANFOSS_RED = (226, 0, 15)
 DANFOSS_DARK = (50, 50, 50)
 DANFOSS_GREY = (120, 120, 120)
+
+
+def check_rate_limit(request: gr.Request, feature: str, limit: int) -> tuple[bool, str]:
+    """Check if user has exceeded rate limit. Returns (allowed, message)."""
+    if request is None:
+        # Local development without request tracking
+        return True, ""
+
+    ip = request.client.host if hasattr(request, 'client') else "unknown"
+    now = datetime.now()
+    cutoff = now - timedelta(hours=1)
+
+    with rate_limit_lock:
+        # Clean old entries
+        rate_limit_store[ip][feature] = [
+            ts for ts in rate_limit_store[ip][feature] if ts > cutoff
+        ]
+
+        # Check limit
+        current_count = len(rate_limit_store[ip][feature])
+        remaining = limit - current_count
+
+        if current_count >= limit:
+            return False, f"⏱️ Rate limit reached. You've used {current_count}/{limit} {feature} requests this hour. Try again in a few minutes."
+
+        # Record this request
+        rate_limit_store[ip][feature].append(now)
+        remaining = limit - current_count - 1
+
+        return True, f"✅ {remaining}/{limit} {feature} requests remaining this hour"
 
 
 def _markdown_to_pdf(md_text: str, output_path: Path) -> Path:
@@ -171,8 +209,13 @@ def list_reports() -> str:
     return "No reports generated yet."
 
 
-def quick_chat(message: str, history: list, briefing_text: str):
+def quick_chat(message: str, history: list, briefing_text: str, request: gr.Request = None):
     """Answer questions grounded strictly in the briefing report."""
+    # Check rate limit
+    allowed, limit_msg = check_rate_limit(request, "chat", RATE_LIMIT_CHAT)
+    if not allowed:
+        return limit_msg
+
     if not briefing_text:
         return "No briefing loaded yet. Generate or load a briefing first."
 
@@ -221,8 +264,13 @@ def _search_web(queries: list[str]) -> str:
     return json.dumps(all_results, indent=2)
 
 
-def deep_dive(question: str, briefing_text: str) -> str:
+def deep_dive(question: str, briefing_text: str, request: gr.Request = None) -> str:
     """Research a question thoroughly using live web search, grounded in sources."""
+    # Check rate limit
+    allowed, limit_msg = check_rate_limit(request, "deepdive", RATE_LIMIT_DEEPDIVE)
+    if not allowed:
+        return limit_msg
+
     if not briefing_text:
         return "No briefing loaded yet. Generate or load a briefing first."
 
@@ -467,6 +515,11 @@ with gr.Blocks(title="Danfoss Power Solutions — Competitive Intelligence Monit
         "**Quick Chat** answers from the report only. "
         "**Research This** runs a live web search for a thorough, source-cited deep dive."
     )
+    gr.Markdown(
+        f"⚠️ **Rate Limits (to prevent abuse):** {RATE_LIMIT_CHAT} quick chats per hour, "
+        f"{RATE_LIMIT_DEEPDIVE} deep-dives per hour. Resets every 60 minutes.",
+        elem_classes="rate-limit-info"
+    )
 
     chatbot = gr.Chatbot(label="Briefing Q&A", height=400)
     chat_input = gr.Textbox(
@@ -479,31 +532,39 @@ with gr.Blocks(title="Danfoss Power Solutions — Competitive Intelligence Monit
         chat_btn = gr.Button("Quick Chat", variant="secondary")
         dive_btn = gr.Button("Research This", variant="primary")
 
-    def on_quick_chat(message, history, briefing_text):
-        if not message.strip():
-            return history, ""
-        history = history + [{"role": "user", "content": message}]
-        answer = quick_chat(message, history[:-1], briefing_text)
-        history = history + [{"role": "assistant", "content": answer}]
-        return history, ""
+    chat_status = gr.Markdown("", visible=False)
 
-    def on_deep_dive(message, history, briefing_text):
+    def on_quick_chat(message, history, briefing_text, request: gr.Request):
         if not message.strip():
-            return history, ""
-        history = history + [{"role": "user", "content": f"[Deep Dive] {message}"}]
-        answer = deep_dive(message, briefing_text)
+            return history, "", ""
+        history = history + [{"role": "user", "content": message}]
+        answer = quick_chat(message, history[:-1], briefing_text, request)
         history = history + [{"role": "assistant", "content": answer}]
-        return history, ""
+
+        # Get remaining quota
+        _, status_msg = check_rate_limit(request, "chat", RATE_LIMIT_CHAT)
+        return history, "", status_msg
+
+    def on_deep_dive(message, history, briefing_text, request: gr.Request):
+        if not message.strip():
+            return history, "", ""
+        history = history + [{"role": "user", "content": f"[Deep Dive] {message}"}]
+        answer = deep_dive(message, briefing_text, request)
+        history = history + [{"role": "assistant", "content": answer}]
+
+        # Get remaining quota
+        _, status_msg = check_rate_limit(request, "deepdive", RATE_LIMIT_DEEPDIVE)
+        return history, "", status_msg
 
     chat_btn.click(
         fn=on_quick_chat,
         inputs=[chat_input, chatbot, briefing_state],
-        outputs=[chatbot, chat_input],
+        outputs=[chatbot, chat_input, chat_status],
     )
     dive_btn.click(
         fn=on_deep_dive,
         inputs=[chat_input, chatbot, briefing_state],
-        outputs=[chatbot, chat_input],
+        outputs=[chatbot, chat_input, chat_status],
     )
 
 
