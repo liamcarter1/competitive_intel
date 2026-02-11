@@ -19,7 +19,8 @@ from anthropic import Anthropic
 from fpdf import FPDF
 from openai import OpenAI
 
-from competitive_intel.graph import run_pipeline, run_annual_report_pipeline
+# HF Spaces deployment: files are at root level
+from graph import run_pipeline, run_annual_report_pipeline
 
 OUTPUT_DIR = Path(__file__).parent / "output"
 OUTPUT_DIR.mkdir(exist_ok=True)

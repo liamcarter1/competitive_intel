@@ -13,10 +13,12 @@ from langchain_openai import ChatOpenAI
 from langgraph.graph import END, StateGraph
 from langgraph.types import Send
 
-from competitive_intel.tools import search_serper
+# HF Spaces deployment: files are at root level
+from tools import search_serper
 
 CONFIG_DIR = Path(__file__).parent / "config"
-OUTPUT_DIR = Path(__file__).resolve().parent.parent.parent / "output"
+# HF Spaces: output directory at root level
+OUTPUT_DIR = Path(__file__).parent / "output"
 
 
 def _load_yaml(name: str) -> dict:
