@@ -1,28 +1,38 @@
 scan_competitor:
   description: >
-    Search the web thoroughly for recent competitive activity about {competitor}
-    in the {industry} industry as of {current_date}. Run multiple targeted searches
-    covering different angles. Focus on:
+    Analyze the web search results below for recent competitive activity about
+    {competitor} in the {industry} industry as of {current_date}. The results
+    include both recent news articles (marked [NEWS]) and broader web results
+    (marked [WEB]). Prioritise the most recent and impactful findings.
+
+    Extract intelligence across ALL of these categories:
     - New product releases, feature updates, version launches, and product roadmap announcements
     - R&D investments, research papers, patent filings, and technical blog posts
     - Engineering team growth, key technical hires, and talent acquisitions
     - Pricing changes, new packaging/tiers, or business model shifts
     - Partnerships, integrations, ecosystem plays, and channel strategy changes
     - Acquisitions, mergers, funding rounds, and financial performance indicators
+    - Customer wins, new contracts, case studies, and go-to-market messaging changes
+    - Analyst reports, market share data, stock movements, and analyst ratings
+    - Regulatory actions, lawsuits, compliance issues, and trade/tariff exposure
+    - Patent filings and IP activity signaling future product direction
+    - Hiring patterns and open roles that reveal strategic investment areas
     - Conference talks, demos, and technical previews of upcoming capabilities
-    - Customer wins, case studies, and go-to-market messaging changes
-    - Analyst reports, market share data, and industry rankings
-    Gather as much relevant, recent intelligence as possible about {competitor}
-    relative to {company}. Be thorough — run at least 2-3 searches with different
-    search terms to cover product, business, and technical angles.
+
+    For each finding, note whether it came from a recent news source or a web
+    source, and flag any findings from the past 30 days as [RECENT].
   expected_output: >
     A comprehensive structured list of competitive intelligence findings for
     {competitor}. Include:
-    - Product & Technology: releases, features, technical capabilities, R&D signals
-    - Business & Strategy: pricing, partnerships, M&A, funding, go-to-market changes
-    - Talent & Organization: key hires, team growth, leadership changes
-    Each finding should include the source URL, date, and a 2-3 sentence summary
-    of why it matters. Include at least 5-8 findings where available.
+    - Product & Technology: releases, features, technical capabilities, R&D signals, patent filings
+    - Business & Strategy: pricing, partnerships, M&A, funding, go-to-market changes, financial results
+    - Talent & Organization: key hires, team growth, leadership changes, hiring patterns
+    - Market & Regulatory: analyst ratings, regulatory actions, legal developments, trade exposure
+    - Customer Activity: new customer wins, contracts, case studies, account losses
+    Each finding should include the source URL, date, a recency flag [RECENT] if
+    from the past 30 days, and a 2-3 sentence summary of why it matters.
+    Include at least 8-12 findings where available. Prioritise recent news over
+    older web results.
   agent: trend_scanner
 
 analyze_findings:

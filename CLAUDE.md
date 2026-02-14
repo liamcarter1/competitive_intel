@@ -20,7 +20,7 @@ competitive_intel/
     │   ├── agents.yaml             # Agent roles, goals, backstories (used as system prompts)
     │   └── tasks.yaml              # Task descriptions and expected outputs (used as user prompts)
     └── tools/
-        └── __init__.py             # search_serper() function for web search
+        └── __init__.py             # search_serper() and search_serper_news() for web/news search
 ```
 
 ### Briefing Pipeline Graph
@@ -34,7 +34,7 @@ User Input ──→ fan_out ─→ scan(competitor_B) ─→ fan_in ──→ a
                                                            └────────────└──────────────────────────┘
 ```
 
-- **Fan-out**: Parallel scan nodes (one per competitor), each calling Serper API then summarizing with GPT-4o
+- **Fan-out**: Parallel scan nodes (one per competitor), each running 9 Serper News searches (recent news, past month) + 5 Serper Web searches (broader context) then summarizing with GPT-4o
 - **Fan-in**: Aggregates all scan results into shared state
 - **Sequential**: analyze (Claude Sonnet) → recommend (Claude Sonnet) → evaluate (Claude Sonnet) → write_briefing (GPT-4o-mini)
 - **Quality gate**: The evaluate node checks analysis and recommendations against rubrics. Failures route back to retry the failing node with feedback. Max 2 retries per node.
@@ -74,7 +74,7 @@ User Input ──→ fan_out_annual ─→ scan_annual_report(competitor_B) [+ i
 ```
 OPENAI_API_KEY          # Used by scan and write_briefing nodes, and quick chat
 ANTHROPIC_API_KEY       # Used by analyze and recommend nodes, and deep-dive synthesis
-SERPER_API_KEY          # Used by scan nodes and deep-dive web search
+SERPER_API_KEY          # Used by scan nodes (news + web search) and deep-dive web search
 ```
 
 These MUST be set in the environment before running. Never commit these values.
@@ -99,7 +99,7 @@ uv run competitive_intel   # Run the CLI pipeline
 ### Input Handling
 - All user inputs from the Gradio UI (company, industry, competitors, chat messages) are passed to external LLM APIs. Treat these as untrusted.
 - Do not construct shell commands, file paths, or SQL queries from user input.
-- User input passed to `_search_web()` and `search_serper()` goes directly to the Serper API — do not add any filesystem or command execution based on this input.
+- User input passed to `_search_web()`, `search_serper()`, and `search_serper_news()` goes directly to the Serper API — do not add any filesystem or command execution based on this input.
 - Validate that user inputs are non-empty strings before processing (as `run_briefing()` already does).
 
 ### Dependency Security
@@ -114,7 +114,8 @@ uv run competitive_intel   # Run the CLI pipeline
 
 ### Network Security
 - All external API calls (OpenAI, Anthropic, Serper) must use HTTPS. Do not downgrade to HTTP.
-- Set explicit timeouts on all HTTP requests (as `search_serper()` does with `timeout=15`).
+- Serper has two endpoints: `/search` (web results) and `/news` (news articles with date filtering via `tbs` parameter). Both are used by the briefing scan.
+- Set explicit timeouts on all HTTP requests (as `search_serper()` and `search_serper_news()` do with `timeout=15`).
 - Do not add proxy or redirect-following logic that could leak credentials.
 
 ## Coding Protocols
@@ -139,7 +140,7 @@ uv run competitive_intel   # Run the CLI pipeline
 - State is shared via a `GraphState` TypedDict. Use `Annotated[list, operator.add]` for fields that accumulate across parallel nodes (e.g., `scan_results`).
 
 ### LLM Model Selection
-- Scan nodes: GPT-4o (reliable for search result summarization)
+- Scan nodes: GPT-4o (reliable for search result summarization; receives ~112 results from 14 searches per competitor)
 - Analyze node: Claude Sonnet (better analytical reasoning)
 - Recommend node: Claude Sonnet (better strategic synthesis)
 - Evaluate node: Claude Sonnet (rubric-based quality judgment)

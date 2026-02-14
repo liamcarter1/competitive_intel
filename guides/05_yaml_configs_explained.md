@@ -171,39 +171,44 @@ Each task has `description` (what to do), `expected_output` (what the result sho
 ```yaml
 scan_competitor:
   description: >
-    Search the web thoroughly for recent competitive activity about {competitor}
-    in the {industry} industry as of {current_date}. Run multiple targeted searches
-    covering different angles. Focus on:
+    Analyze the web search results below for recent competitive activity about
+    {competitor} in the {industry} industry as of {current_date}. The results
+    include both recent news articles (marked [NEWS]) and broader web results
+    (marked [WEB]). Prioritise the most recent and impactful findings.
+
+    Extract intelligence across ALL of these categories:
     - New product releases, feature updates, version launches, and product roadmap announcements
     - R&D investments, research papers, patent filings, and technical blog posts
     - Engineering team growth, key technical hires, and talent acquisitions
     - Pricing changes, new packaging/tiers, or business model shifts
     - Partnerships, integrations, ecosystem plays, and channel strategy changes
     - Acquisitions, mergers, funding rounds, and financial performance indicators
+    - Customer wins, new contracts, case studies, and go-to-market messaging changes
+    - Analyst reports, market share data, stock movements, and analyst ratings
+    - Regulatory actions, lawsuits, compliance issues, and trade/tariff exposure
+    - Patent filings and IP activity signaling future product direction
+    - Hiring patterns and open roles that reveal strategic investment areas
     - Conference talks, demos, and technical previews of upcoming capabilities
-    - Customer wins, case studies, and go-to-market messaging changes
-    - Analyst reports, market share data, and industry rankings
 ```
-**Lines 1-15:** The task description is exhaustively specific. Each bullet point is a **category of intelligence** to look for. This serves as a checklist for the LLM — it systematically addresses each category rather than focusing on whatever it finds first. The `{current_date}` placeholder ensures the agent knows what "recent" means.
+The task description is exhaustively specific. Each bullet point is a **category of intelligence** to look for. This serves as a checklist for the LLM — it systematically addresses each category rather than focusing on whatever it finds first. The `{current_date}` placeholder ensures the agent knows what "recent" means.
 
-```yaml
-    Gather as much relevant, recent intelligence as possible about {competitor}
-    relative to {company}. Be thorough — run at least 2-3 searches with different
-    search terms to cover product, business, and technical angles.
-```
-**Lines 16-18:** Explicit instruction to be thorough and use multiple searches. Even though the search queries are hardcoded in `graph.py`, this instruction still helps the LLM understand the breadth of coverage expected when it summarizes the results.
+The description now tells the LLM that results are tagged `[NEWS]` (from Serper's `/news` endpoint) or `[WEB]` (from the standard `/search` endpoint). This lets the LLM distinguish between recent news articles and evergreen web content, and prioritise accordingly. The instruction also asks the LLM to flag findings from the past 30 days as `[RECENT]` — a useful signal for the downstream analyst node.
 
 ```yaml
   expected_output: >
     A comprehensive structured list of competitive intelligence findings for
     {competitor}. Include:
-    - Product & Technology: releases, features, technical capabilities, R&D signals
-    - Business & Strategy: pricing, partnerships, M&A, funding, go-to-market changes
-    - Talent & Organization: key hires, team growth, leadership changes
-    Each finding should include the source URL, date, and a 2-3 sentence summary
-    of why it matters. Include at least 5-8 findings where available.
+    - Product & Technology: releases, features, technical capabilities, R&D signals, patent filings
+    - Business & Strategy: pricing, partnerships, M&A, funding, go-to-market changes, financial results
+    - Talent & Organization: key hires, team growth, leadership changes, hiring patterns
+    - Market & Regulatory: analyst ratings, regulatory actions, legal developments, trade exposure
+    - Customer Activity: new customer wins, contracts, case studies, account losses
+    Each finding should include the source URL, date, a recency flag [RECENT] if
+    from the past 30 days, and a 2-3 sentence summary of why it matters.
+    Include at least 8-12 findings where available. Prioritise recent news over
+    older web results.
 ```
-**Lines 19-26:** The expected output definition. This is like giving the LLM a **template** to fill in. By specifying the structure (three categories, source URL, date, summary), you get consistently formatted output that the downstream analyst node can easily parse. "At least 5-8 findings" sets a minimum bar so the LLM doesn't give you two bullet points and call it done.
+The expected output now has **five categories** (up from three), covering the expanded search scope. The minimum finding target has been raised from 5-8 to **8-12** to match the much richer input data (up to 112 search results per competitor vs the original 15). The recency flag `[RECENT]` and the instruction to prioritise news over web results ensure the briefing stays focused on what's happening *now*.
 
 ```yaml
   agent: trend_scanner

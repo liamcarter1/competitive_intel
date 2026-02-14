@@ -48,7 +48,7 @@ competitive_intel/
 │   │   ├── agents.yaml ← WHO each agent is (role, goal, backstory)
 │   │   └── tasks.yaml  ← WHAT each agent does (task descriptions)
 │   └── tools/
-│       └── __init__.py ← search_serper() function
+│       └── __init__.py ← search_serper() + search_serper_news() functions
 ```
 
 The separation between `agents.yaml`/`tasks.yaml` and `graph.py` is deliberate. The YAML files are like job descriptions — you can tweak an agent's personality or task instructions without touching any Python code. The graph.py file is the wiring — it loads those descriptions, plugs them into LLM calls, and connects the nodes together.
@@ -88,9 +88,23 @@ The scan nodes don't use LLM tool-calling to search the web. Instead, they:
 2. Call the Serper API directly as a Python function
 3. Feed the results into the LLM as user message content
 
-This sidesteps the entire tool-calling format problem. It's also more predictable — you know exactly what searches will run, and the LLM can't decide to skip searching or search for something irrelevant. The tradeoff is less flexibility (the LLM can't dynamically generate creative search queries), but for this use case, the fixed query templates (`"{competitor} latest product news"`, `"{competitor} R&D investments"`, etc.) cover the ground well enough.
+This sidesteps the entire tool-calling format problem. It's also more predictable — you know exactly what searches will run, and the LLM can't decide to skip searching or search for something irrelevant. The tradeoff is less flexibility (the LLM can't dynamically generate creative search queries), but for this use case, the fixed query templates cover the ground well enough.
 
 **Lesson**: Tool-calling is powerful but adds complexity. If you can achieve the same result with a simple function call + prompt, prefer that. Save tool-calling for cases where the LLM genuinely needs to decide *whether* and *how* to use a tool.
+
+### The Dual-Endpoint Search Strategy
+
+The briefing scan uses **two Serper endpoints** to get the best of both worlds:
+
+1. **`/news` endpoint** (9 queries per competitor, filtered to past month): This returns actual news articles sorted by recency — press releases, earnings reports, product announcements, M&A news, executive appointments, regulatory actions, and analyst coverage. Each result comes with a publication date, so the LLM knows how fresh the intelligence is. The `tbs=qdr:m` parameter restricts results to the last 30 days.
+
+2. **`/search` endpoint** (5 queries per competitor, no date filter): This picks up broader context that news doesn't cover — strategy pages on company websites, job postings on LinkedIn/Indeed (a leading indicator of strategic direction), patent filings on USPTO, and regulatory/trade exposure.
+
+Results are tagged `[NEWS (date)]` or `[WEB]` so the LLM can prioritise recent news over older web content. The task prompt explicitly instructs the LLM to flag findings from the past 30 days as `[RECENT]`.
+
+This matters because using only the regular `/search` endpoint was the app's biggest blind spot. Google's web search returns a mix of evergreen content (company "About" pages, Wikipedia) and actual news — and the evergreen stuff often ranks higher. The `/news` endpoint cuts through that noise and surfaces the breaking developments a strategy manager actually cares about.
+
+**Lesson**: When your use case is "tell me what happened recently," use a news-specific search endpoint if one exists. Generic web search is optimised for relevance, not recency — and for competitive intelligence, recency *is* relevance.
 
 ### Why Fan-Out Instead of Sequential Scanning
 
