@@ -381,9 +381,24 @@ def build_graph():
     return graph.compile()
 
 
-def run_pipeline(company: str, industry: str, competitors: str) -> str:
+_BRIEFING_NODE_LABELS = {
+    "scan_competitor": "Scanned",
+    "analyze": "Competitive analysis complete",
+    "recommend": "Strategic recommendations complete",
+    "evaluate": "Quality evaluation complete",
+    "retry_analyze": "Re-running analysis (evaluator feedback)",
+    "retry_recommend": "Re-running recommendations (evaluator feedback)",
+    "write_briefing": "Final briefing written",
+}
+
+
+def run_pipeline_stream(company: str, industry: str, competitors: str):
+    """Generator that yields (type, message) tuples as each graph node completes.
+
+    type is "progress" for status updates or "result" for the final briefing text.
+    """
     graph = build_graph()
-    result = graph.invoke({
+    inputs = {
         "company": company,
         "industry": industry,
         "competitors": competitors,
@@ -396,8 +411,58 @@ def run_pipeline(company: str, industry: str, competitors: str) -> str:
         "evaluation_feedback": "",
         "retry_count_analysis": 0,
         "retry_count_recommendations": 0,
-    })
-    return result["briefing"]
+    }
+
+    final_state = {}
+    for chunk in graph.stream(inputs, stream_mode="updates"):
+        for node_name, node_output in chunk.items():
+            final_state.update(node_output)
+            label = _BRIEFING_NODE_LABELS.get(node_name, node_name)
+
+            if node_name == "scan_competitor":
+                # Extract competitor name from the scan result (starts with "## CompetitorName")
+                scan_results = node_output.get("scan_results", [])
+                if scan_results:
+                    first_line = scan_results[0].split("\n", 1)[0]
+                    comp_name = first_line.lstrip("# ").strip()
+                else:
+                    comp_name = "unknown"
+                num_results = scan_results[0].count("- [") if scan_results else 0
+                yield ("progress", f"  ✓ {label} {comp_name}")
+
+            elif node_name == "evaluate":
+                eval_result = node_output.get("evaluation_result", "pass")
+                if eval_result == "pass":
+                    yield ("progress", f"  ✓ Quality check passed")
+                else:
+                    yield ("progress", f"  ⚠ Quality check: {eval_result}")
+
+            elif node_name in ("retry_analyze", "retry_recommend"):
+                yield ("progress", f"  ⟳ {label}")
+
+            elif node_name == "analyze":
+                yield ("progress", f"  ✓ {label}")
+
+            elif node_name == "recommend":
+                yield ("progress", f"  ✓ {label}")
+
+            elif node_name == "write_briefing":
+                yield ("progress", f"  ✓ {label} → output/briefing.md")
+
+            else:
+                yield ("progress", f"  ✓ {label}")
+
+    yield ("result", final_state.get("briefing", ""))
+
+
+def run_pipeline(company: str, industry: str, competitors: str) -> str:
+    result = None
+    for msg_type, msg in run_pipeline_stream(company, industry, competitors):
+        if msg_type == "progress":
+            print(msg)
+        elif msg_type == "result":
+            result = msg
+    return result
 
 
 # ── Annual Report Deep Dive Pipeline ─────────────────────────────────────────
@@ -540,15 +605,31 @@ def build_annual_report_graph():
     return graph.compile()
 
 
-def run_annual_report_pipeline(company: str, industry: str, competitors: str) -> str:
+def run_annual_report_pipeline_stream(company: str, industry: str, competitors: str):
+    """Generator that yields (type, message) tuples as each annual report node completes."""
     graph = build_annual_report_graph()
-    result = graph.invoke({
+    inputs = {
         "company": company,
         "industry": industry,
         "competitors": competitors,
         "current_date": datetime.now().strftime("%Y-%m-%d"),
         "report_results": [],
-    })
+    }
+
+    all_report_results = []
+    for chunk in graph.stream(inputs, stream_mode="updates"):
+        for node_name, node_output in chunk.items():
+            if node_name == "scan_annual_report":
+                report_results = node_output.get("report_results", [])
+                all_report_results.extend(report_results)
+                if report_results:
+                    first_line = report_results[0].split("\n", 1)[0]
+                    comp_name = first_line.lstrip("# ").strip()
+                else:
+                    comp_name = "unknown"
+                yield ("progress", f"  ✓ Finished deep dive — {comp_name}")
+            else:
+                yield ("progress", f"  ✓ {node_name}")
 
     current_date = datetime.now().strftime("%Y-%m-%d")
     header = (
@@ -556,9 +637,20 @@ def run_annual_report_pipeline(company: str, industry: str, competitors: str) ->
         f"**Company:** {company} | **Industry:** {industry} | **Date:** {current_date}\n\n"
         f"**Competitors analyzed:** {competitors}\n\n---\n\n"
     )
-    combined = header + "\n\n---\n\n".join(result["report_results"])
+    report_results = all_report_results
+    combined = header + "\n\n---\n\n".join(report_results)
 
     OUTPUT_DIR.mkdir(exist_ok=True)
     (OUTPUT_DIR / "annual_report_analysis.md").write_text(combined, encoding="utf-8")
-    print(f"[annual_report] Complete -> output/annual_report_analysis.md")
-    return combined
+    yield ("progress", f"  ✓ Report saved → output/annual_report_analysis.md")
+    yield ("result", combined)
+
+
+def run_annual_report_pipeline(company: str, industry: str, competitors: str) -> str:
+    result = None
+    for msg_type, msg in run_annual_report_pipeline_stream(company, industry, competitors):
+        if msg_type == "progress":
+            print(msg)
+        elif msg_type == "result":
+            result = msg
+    return result

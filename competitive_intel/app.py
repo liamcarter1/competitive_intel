@@ -19,7 +19,10 @@ from anthropic import Anthropic
 from fpdf import FPDF
 from openai import OpenAI
 
-from competitive_intel.graph import run_pipeline, run_annual_report_pipeline
+from competitive_intel.graph import (
+    run_pipeline, run_pipeline_stream,
+    run_annual_report_pipeline, run_annual_report_pipeline_stream,
+)
 
 OUTPUT_DIR = Path(__file__).parent / "output"
 OUTPUT_DIR.mkdir(exist_ok=True)
@@ -181,24 +184,17 @@ WEB SEARCH RESULTS:
 {search_results}"""
 
 
-def run_briefing(company: str, industry: str, competitors: str) -> str:
-    """Kick off the competitive intelligence crew and return the briefing."""
+def run_briefing_stream(company: str, industry: str, competitors: str):
+    """Kick off the competitive intelligence pipeline and yield progress updates."""
     if not company or not industry or not competitors:
-        return "Please fill in all fields."
+        yield ("error", "Please fill in all fields.")
+        return
 
-    inputs = {
-        "company": company.strip(),
-        "industry": industry.strip(),
-        "competitors": competitors.strip(),
-        "current_date": datetime.now().strftime("%Y-%m-%d"),
-    }
-
-    result = run_pipeline(
-        company=inputs["company"],
-        industry=inputs["industry"],
-        competitors=inputs["competitors"],
+    yield from run_pipeline_stream(
+        company=company.strip(),
+        industry=industry.strip(),
+        competitors=competitors.strip(),
     )
-    return result
 
 
 def list_reports() -> str:
@@ -366,6 +362,7 @@ with gr.Blocks(title="Danfoss Power Solutions — Competitive Intelligence Monit
             )
             generate_btn = gr.Button("Generate Briefing", variant="primary", size="lg")
             status = gr.Markdown("*Ready to generate.*")
+            progress_log = gr.Markdown("", elem_id="briefing-progress")
 
         with gr.Column():
             gr.Markdown(
@@ -376,6 +373,7 @@ with gr.Blocks(title="Danfoss Power Solutions — Competitive Intelligence Monit
             )
             annual_btn = gr.Button("Run Annual Report Analysis", variant="primary", size="lg")
             annual_status = gr.Markdown("*Ready to run.*")
+            annual_progress_log = gr.Markdown("", elem_id="annual-progress")
 
     # --- Briefing Output ---
     gr.Markdown("---")
@@ -386,19 +384,38 @@ with gr.Blocks(title="Danfoss Power Solutions — Competitive Intelligence Monit
 
     def on_generate(company, industry, competitors):
         yield {
-            status: "*Generating briefing — this may take several minutes...*",
+            status: "*⟳ Starting briefing pipeline...*",
             output: "", briefing_state: "",
+            progress_log: "",
             briefing_pdf_btn: gr.update(visible=False),
             briefing_pdf_file: gr.update(visible=False, value=None),
         }
         try:
-            result = run_briefing(company, industry, competitors)
-            yield {
-                status: "*Briefing complete!*",
-                output: result, briefing_state: result,
-                briefing_pdf_btn: gr.update(visible=True),
-                briefing_pdf_file: gr.update(visible=False, value=None),
-            }
+            log_lines = []
+            for msg_type, msg in run_briefing_stream(company, industry, competitors):
+                if msg_type == "error":
+                    yield {
+                        status: f"*{msg}*",
+                        output: "", briefing_state: "",
+                        progress_log: "",
+                        briefing_pdf_btn: gr.update(visible=False),
+                        briefing_pdf_file: gr.update(visible=False, value=None),
+                    }
+                    return
+                elif msg_type == "progress":
+                    log_lines.append(msg)
+                    yield {
+                        status: f"*{msg.strip()}...*",
+                        progress_log: "\n\n".join(log_lines),
+                    }
+                elif msg_type == "result":
+                    yield {
+                        status: "*Briefing complete!*",
+                        output: msg, briefing_state: msg,
+                        progress_log: "\n\n".join(log_lines),
+                        briefing_pdf_btn: gr.update(visible=True),
+                        briefing_pdf_file: gr.update(visible=False, value=None),
+                    }
         except Exception as e:
             import traceback
             tb = traceback.format_exc()
@@ -407,6 +424,7 @@ with gr.Blocks(title="Danfoss Power Solutions — Competitive Intelligence Monit
             yield {
                 status: f"*Error: {e}*",
                 output: f"Full traceback written to {log_path}", briefing_state: "",
+                progress_log: "",
                 briefing_pdf_btn: gr.update(visible=False),
                 briefing_pdf_file: gr.update(visible=False, value=None),
             }
@@ -414,7 +432,7 @@ with gr.Blocks(title="Danfoss Power Solutions — Competitive Intelligence Monit
     generate_btn.click(
         fn=on_generate,
         inputs=[company, industry, competitors],
-        outputs=[status, output, briefing_state, briefing_pdf_btn, briefing_pdf_file],
+        outputs=[status, output, briefing_state, progress_log, briefing_pdf_btn, briefing_pdf_file],
     )
 
     def on_briefing_pdf(briefing_text):
@@ -443,28 +461,39 @@ with gr.Blocks(title="Danfoss Power Solutions — Competitive Intelligence Monit
             yield {
                 annual_status: "*Please fill in all fields above.*",
                 annual_output: "", annual_report_state: "",
+                annual_progress_log: "",
                 annual_pdf_btn: gr.update(visible=False),
                 annual_pdf_file: gr.update(visible=False, value=None),
             }
             return
         yield {
-            annual_status: "*Running annual report deep dive — this may take several minutes...*",
+            annual_status: "*⟳ Starting annual report deep dive...*",
             annual_output: "", annual_report_state: "",
+            annual_progress_log: "",
             annual_pdf_btn: gr.update(visible=False),
             annual_pdf_file: gr.update(visible=False, value=None),
         }
         try:
-            result = run_annual_report_pipeline(
+            log_lines = []
+            for msg_type, msg in run_annual_report_pipeline_stream(
                 company=company.strip(),
                 industry=industry.strip(),
                 competitors=competitors.strip(),
-            )
-            yield {
-                annual_status: "*Annual report analysis complete!*",
-                annual_output: result, annual_report_state: result,
-                annual_pdf_btn: gr.update(visible=True),
-                annual_pdf_file: gr.update(visible=False, value=None),
-            }
+            ):
+                if msg_type == "progress":
+                    log_lines.append(msg)
+                    yield {
+                        annual_status: f"*{msg.strip()}...*",
+                        annual_progress_log: "\n\n".join(log_lines),
+                    }
+                elif msg_type == "result":
+                    yield {
+                        annual_status: "*Annual report analysis complete!*",
+                        annual_output: msg, annual_report_state: msg,
+                        annual_progress_log: "\n\n".join(log_lines),
+                        annual_pdf_btn: gr.update(visible=True),
+                        annual_pdf_file: gr.update(visible=False, value=None),
+                    }
         except Exception as e:
             import traceback
             tb = traceback.format_exc()
@@ -474,6 +503,7 @@ with gr.Blocks(title="Danfoss Power Solutions — Competitive Intelligence Monit
                 annual_status: f"*Error: {e}*",
                 annual_output: f"Full traceback written to {log_path}",
                 annual_report_state: "",
+                annual_progress_log: "",
                 annual_pdf_btn: gr.update(visible=False),
                 annual_pdf_file: gr.update(visible=False, value=None),
             }
@@ -481,7 +511,7 @@ with gr.Blocks(title="Danfoss Power Solutions — Competitive Intelligence Monit
     annual_btn.click(
         fn=run_annual_report_analysis,
         inputs=[company, industry, competitors],
-        outputs=[annual_status, annual_output, annual_report_state, annual_pdf_btn, annual_pdf_file],
+        outputs=[annual_status, annual_output, annual_report_state, annual_progress_log, annual_pdf_btn, annual_pdf_file],
     )
 
     def on_annual_pdf(report_text):

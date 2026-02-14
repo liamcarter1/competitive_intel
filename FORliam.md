@@ -53,7 +53,7 @@ competitive_intel/
 
 The separation between `agents.yaml`/`tasks.yaml` and `graph.py` is deliberate. The YAML files are like job descriptions — you can tweak an agent's personality or task instructions without touching any Python code. The graph.py file is the wiring — it loads those descriptions, plugs them into LLM calls, and connects the nodes together.
 
-`app.py` is the frontend. It doesn't know or care about LangGraph internals — it just calls `run_pipeline(company, industry, competitors)` and gets back a string of markdown.
+`app.py` is the frontend. It doesn't know or care about LangGraph internals — it calls `run_pipeline_stream(company, industry, competitors)` and iterates over a generator that yields progress messages as each node completes, then the final briefing text. The UI shows a live progress log so users can see scans finishing, analysis running, evaluation passing/failing, and retries happening — all in real time.
 
 ---
 
@@ -105,6 +105,20 @@ Results are tagged `[NEWS (date)]` or `[WEB]` so the LLM can prioritise recent n
 This matters because using only the regular `/search` endpoint was the app's biggest blind spot. Google's web search returns a mix of evergreen content (company "About" pages, Wikipedia) and actual news — and the evergreen stuff often ranks higher. The `/news` endpoint cuts through that noise and surfaces the breaking developments a strategy manager actually cares about.
 
 **Lesson**: When your use case is "tell me what happened recently," use a news-specific search endpoint if one exists. Generic web search is optimised for relevance, not recency — and for competitive intelligence, recency *is* relevance.
+
+### Real-Time Progress: Streaming Node Completions to the UI
+
+Here's a UX problem that's easy to overlook: the briefing pipeline takes 2-5 minutes. For that entire time, the user sees a static "Generating briefing..." message and nothing else. Are the scans running? Did something crash? Is it stuck? No way to tell. This is the "spinning beach ball" problem — the system is working fine, but it *feels* broken.
+
+The fix uses a LangGraph feature called **streaming mode**. Instead of `graph.invoke()` (which blocks until everything is done and returns the final state), you call `graph.stream(inputs, stream_mode="updates")`. This returns a generator that yields a chunk after *each graph node completes*. Each chunk is a dict like `{"scan_competitor": {"scan_results": [...]}}` — the node name and its output.
+
+The pipeline runners (`run_pipeline_stream()` and `run_annual_report_pipeline_stream()`) wrap this into a cleaner interface. They iterate over the stream chunks, map each node name to a human-readable message (e.g., `"scan_competitor"` → `"✓ Scanned Parker Hannifin"`), and yield `("progress", message)` tuples. At the end, they yield `("result", briefing_text)`.
+
+On the Gradio side, the `on_generate()` callback is already a generator (it uses `yield` to update the UI incrementally). It just iterates over the stream and yields a new UI state after each progress message. Gradio's generator pattern handles the rest — each `yield` pushes an update to the browser.
+
+The non-streaming `run_pipeline()` and `run_annual_report_pipeline()` functions still exist as thin wrappers that print progress to stdout. The CLI uses these. Same underlying stream, different output target.
+
+**Lesson**: When your backend already processes work in discrete steps (graph nodes, pipeline stages, batch items), surfacing those steps to the user is almost free — you just need the framework to yield between steps instead of blocking until the end. LangGraph's `stream_mode="updates"` does exactly this. The key insight is that "progress feedback" doesn't require streaming tokens from the LLM (which is complex and async) — it just requires knowing when each *stage* finishes, which is much simpler.
 
 ### Why Fan-Out Instead of Sequential Scanning
 
