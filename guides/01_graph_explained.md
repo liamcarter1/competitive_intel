@@ -43,9 +43,9 @@ from langgraph.types import Send
 - `Send`: This is LangGraph's mechanism for **fan-out** (parallelism). Instead of a node returning just state updates, it can return `Send` objects that say "run this other node with this specific input." This is how we scan multiple competitors in parallel.
 
 ```python
-from competitive_intel.tools import search_serper
+from competitive_intel.tools import search_serper, search_serper_news
 ```
-**Line 16:** Imports our custom web search function from the tools module. This keeps the search logic separate from the graph logic — good separation of concerns.
+**Line 16:** Imports our custom web search functions from the tools module. `search_serper` calls the standard `/search` endpoint for web results, while `search_serper_news` calls the `/news` endpoint for recent news articles with date filtering. This keeps the search logic separate from the graph logic — good separation of concerns.
 
 ---
 
@@ -194,33 +194,64 @@ The `inputs` dict is built from state for use in prompt interpolation. This is t
 **Lines 94-95:** Build the prompts. After this, `system` contains something like "Role: Hydraulics Competitive Trend Scanner\nGoal: Find the latest competitor news..." and `desc` contains the detailed task description.
 
 ```python
-    queries = [
-        f"{competitor} latest product news {state['industry']} {state['current_date'][:4]}",
-        f"{competitor} R&D investment partnerships acquisitions {state['current_date'][:4]}",
-        f"{competitor} pricing changes strategy {state['industry']}",
+    # ── News searches (Serper /news endpoint, filtered to past month) ────────
+    news_queries = [
+        f"{competitor} {industry} news announcement {year}",
+        f"{competitor} product launch release update {year}",
+        f"{competitor} acquisition merger partnership deal {year}",
+        # ... 9 queries total covering news, products, M&A, pricing,
+        #     customer wins, leadership, earnings, regulatory, analyst ratings
+    ]
+
+    # ── Web searches (Serper /search endpoint, broader context) ──────────────
+    web_queries = [
+        f"{competitor} {industry} strategy expansion growth plans {year}",
+        f"{competitor} hiring jobs open roles site:linkedin.com OR site:indeed.com {year}",
+        # ... 5 queries total covering strategy, product roadmaps,
+        #     job postings, patents, regulatory/trade exposure
     ]
 ```
-**Lines 98-102:** Generates three different search queries per competitor. This is a key design decision — rather than one broad search, we run **multiple targeted searches** covering different angles (product news, R&D/M&A, pricing/strategy). `state['current_date'][:4]` extracts just the year (e.g., `"2026"`) to keep results recent.
+**Lines 101-125:** The scan uses a **dual-endpoint strategy** — two tiers of search queries designed to catch different types of competitive intelligence:
 
-**Why hardcode the queries instead of letting the LLM generate them?** Speed and reliability. Having the LLM generate queries would require an extra API call (adding latency and cost), and the LLM might generate vague or unhelpful queries. These templates are proven to work well.
+1. **News queries** (9 queries): Call `search_serper_news()` which hits Serper's `/news` endpoint, filtered to the past month (`tbs="qdr:m"`). These return actual news articles sorted by recency — press releases, earnings reports, product launches, M&A, executive hires, regulatory actions, analyst coverage. Each result includes a publication date.
+
+2. **Web queries** (5 queries): Call `search_serper()` which hits the standard `/search` endpoint. These pick up broader context that news doesn't cover — job postings on LinkedIn/Indeed (leading indicator of strategy), patent filings on USPTO, regulatory exposure, and company strategy pages.
+
+**Why two endpoints?** The regular `/search` endpoint returns a mix of evergreen web content (Wikipedia, company "About" pages) and news, with evergreen often ranking higher. For a competitive intelligence tool, recency is everything — the `/news` endpoint cuts through the noise and surfaces breaking developments. The web queries complement this with signals that don't appear as news articles.
+
+**Why hardcode the queries instead of letting the LLM generate them?** Speed and reliability. Having the LLM generate queries would require an extra API call (adding latency and cost), and the LLM might generate vague or unhelpful queries. These templates cover the key intelligence categories comprehensively.
 
 ```python
-    all_results = []
-    for q in queries:
+    # Run news searches (recent news articles, past month)
+    for q in news_queries:
+        try:
+            data = search_serper_news(q, num_results=10, tbs="qdr:m")
+            for item in data.get("news", [])[:8]:
+                date = item.get("date", "")
+                date_str = f" ({date})" if date else ""
+                all_results.append(
+                    f"- [NEWS{date_str}] [{item.get('title', '')}]({item.get('link', '')}): {item.get('snippet', '')}"
+                )
+        except Exception as e:
+            all_results.append(f"- News search error for '{q}': {e}")
+
+    # Run web searches (broader context, top 8 per query)
+    for q in web_queries:
         try:
             data = search_serper(q)
-            for item in data.get("organic", [])[:5]:
+            for item in data.get("organic", [])[:8]:
                 all_results.append(
-                    f"- [{item.get('title', '')}]({item.get('link', '')}): {item.get('snippet', '')}"
+                    f"- [WEB] [{item.get('title', '')}]({item.get('link', '')}): {item.get('snippet', '')}"
                 )
         except Exception as e:
             all_results.append(f"- Search error for '{q}': {e}")
 ```
-**Lines 105-114:** Runs each search query and collects results.
-- `search_serper(q)` calls the Serper API (Google search wrapper) and returns JSON.
-- `data.get("organic", [])[:5]` gets the organic (non-ad) search results, limited to 5 per query. `.get()` with a default `[]` prevents a `KeyError` if the key is missing.
-- Results are formatted as markdown links: `- [Title](URL): Snippet`. This format is both human-readable and easy for the LLM to parse.
+**Lines 127-151:** Runs both tiers of searches and collects results.
+- News results are tagged `[NEWS (date)]` and web results are tagged `[WEB]` — this lets the LLM know which are recent news vs broader web context, and prioritise accordingly.
+- Top 8 results per query (up from the original 5) — catches more relevant content that may land lower in results.
+- `data.get("news", [])` for news endpoint (different key from the web endpoint's `"organic"`).
 - The `try/except` ensures one failed search doesn't crash the entire scan. The error is recorded as a result so the LLM knows something went wrong.
+- Total potential results: 9 news queries × 8 + 5 web queries × 8 = **up to 112 results** per competitor (vs the original 15).
 
 ```python
     search_context = "\n".join(all_results) if all_results else "No search results found."

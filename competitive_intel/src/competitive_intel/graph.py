@@ -13,7 +13,7 @@ from langchain_openai import ChatOpenAI
 from langgraph.graph import END, StateGraph
 from langgraph.types import Send
 
-from competitive_intel.tools import search_serper
+from competitive_intel.tools import search_serper, search_serper_news
 
 CONFIG_DIR = Path(__file__).parent / "config"
 OUTPUT_DIR = Path(__file__).resolve().parent.parent.parent / "output"
@@ -98,21 +98,54 @@ def scan_competitor(state: ScanState) -> dict:
     system = _agent_system_prompt("trend_scanner", inputs)
     desc, expected = _task_prompt("scan_competitor", inputs)
 
-    # Generate search queries
-    queries = [
-        f"{competitor} latest product news {state['industry']} {state['current_date'][:4]}",
-        f"{competitor} R&D investment partnerships acquisitions {state['current_date'][:4]}",
-        f"{competitor} pricing changes strategy {state['industry']}",
+    year = state["current_date"][:4]
+    industry = state["industry"]
+    company = state["company"]
+
+    # ── News searches (Serper /news endpoint, filtered to past month) ────────
+    news_queries = [
+        f"{competitor} {industry} news announcement {year}",
+        f"{competitor} product launch release update {year}",
+        f"{competitor} acquisition merger partnership deal {year}",
+        f"{competitor} pricing changes new model tier {year}",
+        f"{competitor} customer win contract award {year}",
+        f"{competitor} executive appointment leadership hire {year}",
+        f"{competitor} earnings revenue financial results {year}",
+        f"{competitor} {industry} regulatory lawsuit patent filing {year}",
+        f"{competitor} stock analyst upgrade downgrade guidance {year}",
     ]
 
-    # Run searches
+    # ── Web searches (Serper /search endpoint, broader context) ──────────────
+    web_queries = [
+        f"{competitor} {industry} strategy expansion growth plans {year}",
+        f"{competitor} {industry} new product features roadmap {year}",
+        f"{competitor} hiring jobs open roles site:linkedin.com OR site:indeed.com {year}",
+        f"{competitor} {industry} patent USPTO OR Espacenet {year}",
+        f"{competitor} {industry} tariff trade regulatory compliance {year}",
+    ]
+
     all_results = []
-    for q in queries:
+
+    # Run news searches (recent news articles, past month)
+    for q in news_queries:
+        try:
+            data = search_serper_news(q, num_results=10, tbs="qdr:m")
+            for item in data.get("news", [])[:8]:
+                date = item.get("date", "")
+                date_str = f" ({date})" if date else ""
+                all_results.append(
+                    f"- [NEWS{date_str}] [{item.get('title', '')}]({item.get('link', '')}): {item.get('snippet', '')}"
+                )
+        except Exception as e:
+            all_results.append(f"- News search error for '{q}': {e}")
+
+    # Run web searches (broader context, top 8 per query)
+    for q in web_queries:
         try:
             data = search_serper(q)
-            for item in data.get("organic", [])[:5]:
+            for item in data.get("organic", [])[:8]:
                 all_results.append(
-                    f"- [{item.get('title', '')}]({item.get('link', '')}): {item.get('snippet', '')}"
+                    f"- [WEB] [{item.get('title', '')}]({item.get('link', '')}): {item.get('snippet', '')}"
                 )
         except Exception as e:
             all_results.append(f"- Search error for '{q}': {e}")
@@ -131,7 +164,7 @@ def scan_competitor(state: ScanState) -> dict:
         {"role": "system", "content": system},
         {"role": "user", "content": user_msg},
     ])
-    print(f"[scan] Finished scanning {competitor} (gpt-4o)")
+    print(f"[scan] Finished scanning {competitor} (gpt-4o) — {len(all_results)} results from {len(news_queries)} news + {len(web_queries)} web queries")
     return {"scan_results": [f"## {competitor}\n\n{response.content}"]}
 
 
