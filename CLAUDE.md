@@ -54,8 +54,8 @@ User Input ──→ fan_out_annual ─→ scan_annual_report(competitor_B) [+ i
 ### Key Components
 
 - **LangGraph Pipeline** (`graph.py`): A `StateGraph` with fan-out/fan-in for parallel competitor scanning, followed by sequential analysis, recommendations, and report writing. Each node makes its own LLM API call with a clean message list — no shared conversation history between nodes.
-- **Gradio App** (`app.py`): Web UI with briefing generation, report loading, quick chat (OpenAI gpt-4o-mini), and deep-dive research (Serper search + Anthropic Claude synthesis).
-- **CLI** (`main.py`): `run()` function callable via `competitive_intel` script entry point.
+- **Gradio App** (`app.py`): Web UI with briefing generation (with real-time progress log), report loading, quick chat (OpenAI gpt-4o-mini), and deep-dive research (Serper search + Anthropic Claude synthesis). Progress updates stream to the UI as each pipeline node completes.
+- **CLI** (`main.py`): `run()` function callable via `competitive_intel` script entry point. Uses the same streaming generators as the UI, printing progress to stdout.
 - **Config** (`agents.yaml`, `tasks.yaml`): Agent roles/backstories and task descriptions loaded at runtime and interpolated into system/user prompts for each node.
 
 ## Tech Stack
@@ -100,7 +100,7 @@ uv run competitive_intel   # Run the CLI pipeline
 - All user inputs from the Gradio UI (company, industry, competitors, chat messages) are passed to external LLM APIs. Treat these as untrusted.
 - Do not construct shell commands, file paths, or SQL queries from user input.
 - User input passed to `_search_web()`, `search_serper()`, and `search_serper_news()` goes directly to the Serper API — do not add any filesystem or command execution based on this input.
-- Validate that user inputs are non-empty strings before processing (as `run_briefing()` already does).
+- Validate that user inputs are non-empty strings before processing (as `run_briefing_stream()` already does).
 
 ### Dependency Security
 - Keep dependencies pinned via `uv.lock`. Run `uv sync` to install exact locked versions.
@@ -138,6 +138,7 @@ uv run competitive_intel   # Run the CLI pipeline
 - The graph uses `Send()` for fan-out (parallel competitor scans) and sequential edges for the analysis pipeline.
 - Each node constructs its own message list (system + user) — never pass message history between nodes.
 - State is shared via a `GraphState` TypedDict. Use `Annotated[list, operator.add]` for fields that accumulate across parallel nodes (e.g., `scan_results`).
+- For UI progress, use `graph.stream(stream_mode="updates")` which yields a dict after each node completes. The `run_pipeline_stream()` and `run_annual_report_pipeline_stream()` generators wrap this into `("progress", msg)` / `("result", text)` tuples that Gradio consumes via generator yields. The non-streaming `run_pipeline()` and `run_annual_report_pipeline()` are thin wrappers that print progress to stdout for CLI use.
 
 ### LLM Model Selection
 - Scan nodes: GPT-4o (reliable for search result summarization; receives ~112 results from 14 searches per competitor)

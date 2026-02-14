@@ -541,44 +541,77 @@ This creates a **loop** in the graph: evaluate can route back to retry nodes, wh
 
 ---
 
-## Pipeline Runner (Lines 237-249)
+## Pipeline Runners — Streaming and Non-Streaming
+
+The module exposes two layers: a **streaming generator** (used by the Gradio UI for real-time progress) and a **blocking wrapper** (used by the CLI).
+
+### The Streaming Generator: `run_pipeline_stream()`
+
+```python
+_BRIEFING_NODE_LABELS = {
+    "scan_competitor": "Scanned",
+    "analyze": "Competitive analysis complete",
+    "recommend": "Strategic recommendations complete",
+    "evaluate": "Quality evaluation complete",
+    "retry_analyze": "Re-running analysis (evaluator feedback)",
+    "retry_recommend": "Re-running recommendations (evaluator feedback)",
+    "write_briefing": "Final briefing written",
+}
+
+def run_pipeline_stream(company: str, industry: str, competitors: str):
+    graph = build_graph()
+    inputs = { ... }  # all GraphState fields with initial values
+
+    final_state = {}
+    for chunk in graph.stream(inputs, stream_mode="updates"):
+        for node_name, node_output in chunk.items():
+            final_state.update(node_output)
+            # Map node_name to a human-readable message and yield it
+            yield ("progress", f"  ✓ {label} ...")
+
+    yield ("result", final_state.get("briefing", ""))
+```
+
+The key is `graph.stream(inputs, stream_mode="updates")`. Instead of `graph.invoke()` which blocks until completion, `.stream()` returns a generator that yields a dict chunk **after each graph node completes**. Each chunk is `{node_name: node_output}` — the same data the node returned to LangGraph's state.
+
+The `_BRIEFING_NODE_LABELS` dict maps internal node names to user-friendly messages. Special handling for certain nodes:
+- `scan_competitor`: Extracts the competitor name from the scan result (the text starts with `## CompetitorName`) and includes it in the message.
+- `evaluate`: Reports whether the quality check passed or failed, and what specifically failed.
+- `retry_analyze` / `retry_recommend`: Shows a "re-running" message with a spinning indicator.
+
+Each iteration yields a `("progress", message)` tuple. At the end, it yields `("result", briefing_text)`. The Gradio UI iterates over this generator and pushes each progress message to the browser in real time.
+
+### The Blocking Wrapper: `run_pipeline()`
 
 ```python
 def run_pipeline(company: str, industry: str, competitors: str) -> str:
-    graph = build_graph()
-    result = graph.invoke({
-        "company": company,
-        "industry": industry,
-        "competitors": competitors,
-        "current_date": datetime.now().strftime("%Y-%m-%d"),
-        "scan_results": [],
-        "analysis": "",
-        "recommendations": "",
-        "briefing": "",
-    })
-    return result["briefing"]
+    result = None
+    for msg_type, msg in run_pipeline_stream(company, industry, competitors):
+        if msg_type == "progress":
+            print(msg)
+        elif msg_type == "result":
+            result = msg
+    return result
 ```
-**Lines 237-249:** The public API of this module. Builds the graph, invokes it with initial state, and returns the final briefing.
 
-The initial state dict must include all fields from `GraphState`. The empty values (`[]`, `""`) are placeholders that the nodes will fill in. `scan_results` starts as `[]` because the `operator.add` reducer will append to it.
-
-`graph.invoke()` runs the entire pipeline synchronously — it blocks until all nodes have finished. The return value is the final state dict after all nodes have run. We extract just the `briefing` field since that's all the caller needs.
+This is what the CLI uses. It consumes the same stream but prints progress to stdout instead of yielding to a UI. Same pipeline, same progress messages, different output target.
 
 ---
 
 ## The Execution Flow
 
-When you call `run_pipeline("Danfoss", "Hydraulics", "Parker, Bosch, Eaton")`:
+When you call `run_pipeline_stream("Danfoss", "Hydraulics", "Parker, Bosch, Eaton")`:
 
 1. `fan_out` splits "Parker, Bosch, Eaton" into 3 `Send` objects
 2. Three `scan_competitor` nodes run **in parallel**, each searching the web for one competitor and summarizing with GPT-4o
-3. Their `scan_results` lists are **merged** via `operator.add`
-4. `analyze` reads all scan results and produces analysis with Claude Sonnet
-5. `recommend` reads the analysis and generates recommendations with Claude Sonnet
-6. `evaluate` checks both deliverables against rubrics with Claude Sonnet
-7. If evaluation passes → `write_briefing` combines analysis + recommendations into a final report with GPT-4o-mini
-8. If evaluation fails → the failing node is retried with feedback (up to 2 times), then back to step 6
-9. The briefing is saved to disk and returned
+3. As each scan completes, the stream yields a progress message like `"✓ Scanned Parker Hannifin"`
+4. Their `scan_results` lists are **merged** via `operator.add`
+5. `analyze` reads all scan results and produces analysis with Claude Sonnet → yields `"✓ Competitive analysis complete"`
+6. `recommend` reads the analysis and generates recommendations with Claude Sonnet → yields `"✓ Strategic recommendations complete"`
+7. `evaluate` checks both deliverables against rubrics with Claude Sonnet → yields `"✓ Quality check passed"` (or a failure message)
+8. If evaluation fails → the failing node is retried with feedback (up to 2 times), with retry progress yielded, then back to step 7
+9. `write_briefing` combines analysis + recommendations into a final report with GPT-4o-mini → yields `"✓ Final briefing written"`
+10. The briefing is saved to disk and yielded as the final `("result", ...)` message
 
 ---
 
@@ -655,3 +688,15 @@ def build_annual_report_graph():
 ```
 
 Much simpler than the main pipeline — just fan-out and done. All the complexity (evaluation, retries) is encapsulated inside the node function rather than in the graph topology.
+
+### Annual Report Streaming: `run_annual_report_pipeline_stream()`
+
+Same pattern as the briefing pipeline — uses `graph.stream(stream_mode="updates")` and yields `("progress", msg)` tuples as each `scan_annual_report` node completes. Each message includes the competitor name extracted from the report text (e.g., `"✓ Finished deep dive — Parker Hannifin"`).
+
+One important detail: the streaming function must manually accumulate `report_results` across parallel nodes. With `graph.invoke()`, LangGraph handles the `operator.add` reducer automatically. But with `graph.stream()`, each chunk contains only the individual node's output — there's no automatic merging. So the function maintains its own `all_report_results` list and `extend()`s it with each chunk.
+
+After all nodes complete, the function assembles the combined report (header + all competitor reports), saves it to disk, and yields the final `("result", combined_text)`.
+
+The blocking `run_annual_report_pipeline()` wrapper works identically to the briefing one — prints progress, returns the final result.
+
+**Note on inline evaluation visibility**: Because the annual report evaluation + retry loop happens *inside* `scan_annual_report()` (not as separate graph nodes), those steps don't produce separate stream events. The stream only yields once per competitor — when the entire node finishes (including any retries). This is acceptable for v1; surfacing intra-node progress would require LangGraph's `stream_mode="custom"` with `get_stream_writer()`.
