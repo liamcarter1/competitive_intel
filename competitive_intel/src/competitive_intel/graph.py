@@ -459,7 +459,10 @@ def run_pipeline(company: str, industry: str, competitors: str) -> str:
     result = None
     for msg_type, msg in run_pipeline_stream(company, industry, competitors):
         if msg_type == "progress":
-            print(msg)
+            try:
+                print(msg)
+            except UnicodeEncodeError:
+                print(msg.encode("ascii", errors="replace").decode("ascii"))
         elif msg_type == "result":
             result = msg
     return result
@@ -650,7 +653,10 @@ def run_annual_report_pipeline(company: str, industry: str, competitors: str) ->
     result = None
     for msg_type, msg in run_annual_report_pipeline_stream(company, industry, competitors):
         if msg_type == "progress":
-            print(msg)
+            try:
+                print(msg)
+            except UnicodeEncodeError:
+                print(msg.encode("ascii", errors="replace").decode("ascii"))
         elif msg_type == "result":
             result = msg
     return result
