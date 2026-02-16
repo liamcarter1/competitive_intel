@@ -106,33 +106,46 @@ write_briefing:
        - 5-7 bullet points covering the most critical developments
        - Overall competitive threat level (elevated/stable/reduced) with rationale
 
-    2. PRODUCT & TECHNOLOGY LANDSCAPE
+    2. LATEST NEWS & DEVELOPMENTS (PAST 30 DAYS)
+       - Breaking news and recent announcements from competitors
+       - Product launches, releases, and updates (with dates)
+       - Executive appointments, hiring signals, and organizational changes
+       - M&A activity, partnerships, and strategic deals
+       - Earnings reports, financial results, and analyst commentary
+       - Regulatory filings, lawsuits, and compliance issues
+       - Customer wins, contract awards, and market share shifts
+       - Stock movements and analyst upgrades/downgrades
+       CRITICAL: Prioritize items tagged [NEWS (date)] from the intelligence.
+       Include specific dates and cite sources. This section shows what changed
+       in the past month and what executives need to know NOW.
+
+    3. PRODUCT & TECHNOLOGY LANDSCAPE
        - Competitor product releases and feature updates (detailed)
        - R&D investment signals and technology bets
        - Capability comparison matrix where relevant
        - Implications for {company}'s engineering roadmap
 
-    3. MARKET & BUSINESS INTELLIGENCE
+    4. MARKET & BUSINESS INTELLIGENCE
        - Pricing and packaging changes
        - Go-to-market and sales strategy shifts
        - Partnership and ecosystem developments
        - Customer movement and win/loss signals
 
-    4. COMPETITOR DEEP DIVES
+    5. COMPETITOR DEEP DIVES
        - Per-competitor section with detailed activity summary
        - Strategic intent assessment for each competitor
 
-    5. THREAT ASSESSMENT
+    6. THREAT ASSESSMENT
        - Ranked threats with urgency level and recommended response
        - Emerging risks to monitor
 
-    6. STRATEGIC RECOMMENDATIONS
+    7. STRATEGIC RECOMMENDATIONS
        - For Engineering: R&D priorities and product roadmap actions
        - For Sales: positioning updates and competitive responses
        - For Strategy: investment and partnership recommendations
        - Top 5 immediate action items
 
-    7. WATCH LIST
+    8. WATCH LIST
        - Items requiring continued monitoring next week
        - Early signals that could become significant
 
@@ -141,10 +154,11 @@ write_briefing:
     data points rather than vague generalizations. This report should enable
     executives to make concrete business decisions.
   expected_output: >
-    A professional, comprehensive competitive intelligence briefing (2000+ words)
-    in markdown format with all seven sections above. Must be specific, evidence-based,
-    and actionable for Engineering, Sales, and Strategy teams.
-    Formatted as markdown without '```'.
+    A professional, comprehensive competitive intelligence briefing (2500+ words)
+    in markdown format with all eight sections above. Section 2 (Latest News &
+    Developments) MUST include recent news with specific dates from [NEWS (date)]
+    tagged items. Must be specific, evidence-based, and actionable for Engineering,
+    Sales, and Strategy teams. Formatted as markdown without '```'.
   agent: report_writer
   context:
     - analyze_findings
