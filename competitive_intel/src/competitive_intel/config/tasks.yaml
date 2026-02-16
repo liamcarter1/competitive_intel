@@ -1,38 +1,30 @@
 scan_competitor:
   description: >
-    Analyze the web search results below for recent competitive activity about
-    {competitor} in the {industry} industry as of {current_date}. The results
-    include both recent news articles (marked [NEWS]) and broader web results
-    (marked [WEB]). Prioritise the most recent and impactful findings.
-
-    Extract intelligence across ALL of these categories:
+    Search the web thoroughly for recent competitive activity about {competitor}
+    in the {industry} industry as of {current_date}. Run multiple targeted searches
+    covering different angles. Focus on:
     - New product releases, feature updates, version launches, and product roadmap announcements
     - R&D investments, research papers, patent filings, and technical blog posts
     - Engineering team growth, key technical hires, and talent acquisitions
     - Pricing changes, new packaging/tiers, or business model shifts
     - Partnerships, integrations, ecosystem plays, and channel strategy changes
     - Acquisitions, mergers, funding rounds, and financial performance indicators
-    - Customer wins, new contracts, case studies, and go-to-market messaging changes
-    - Analyst reports, market share data, stock movements, and analyst ratings
-    - Regulatory actions, lawsuits, compliance issues, and trade/tariff exposure
-    - Patent filings and IP activity signaling future product direction
-    - Hiring patterns and open roles that reveal strategic investment areas
     - Conference talks, demos, and technical previews of upcoming capabilities
-
-    For each finding, note whether it came from a recent news source or a web
-    source, and flag any findings from the past 30 days as [RECENT].
+    - Customer wins, case studies, and go-to-market messaging changes
+    - Analyst reports, market share data, and industry rankings
+    Gather as much relevant, recent intelligence as possible about {competitor}
+    relative to {company}. Be thorough — run at least 2-3 searches with different
+    search terms to cover product, business, and technical angles.
   expected_output: >
     A comprehensive structured list of competitive intelligence findings for
     {competitor}. Include:
-    - Product & Technology: releases, features, technical capabilities, R&D signals, patent filings
-    - Business & Strategy: pricing, partnerships, M&A, funding, go-to-market changes, financial results
-    - Talent & Organization: key hires, team growth, leadership changes, hiring patterns
-    - Market & Regulatory: analyst ratings, regulatory actions, legal developments, trade exposure
-    - Customer Activity: new customer wins, contracts, case studies, account losses
-    Each finding should include the source URL, date, a recency flag [RECENT] if
-    from the past 30 days, and a 2-3 sentence summary of why it matters.
-    Include at least 8-12 findings where available. Prioritise recent news over
-    older web results.
+    - Product & Technology: releases, features, technical capabilities, R&D signals
+    - Business & Strategy: pricing, partnerships, M&A, funding, go-to-market changes
+    - Talent & Organization: key hires, team growth, leadership changes
+    Each finding MUST include the source URL in markdown format [title](URL), date,
+    and a 2-3 sentence summary of why it matters. CRITICAL: Preserve all URLs from
+    search results - every finding needs a clickable link. Include at least 5-8
+    findings where available.
   agent: trend_scanner
 
 analyze_findings:
@@ -69,6 +61,10 @@ analyze_findings:
     Sales, Strategy), each containing categorized findings with urgency ratings and
     supporting evidence from the scan. Include a cross-cutting "Key Patterns" section
     highlighting the 3-5 most significant trends observed across all competitors.
+
+    CRITICAL: Include source links [title](URL) for all major competitive moves,
+    product launches, and announcements. Preserve URLs from the scan results so
+    readers can verify claims and read full articles.
   agent: company_analyst
 
 strategic_recommendations:
@@ -125,9 +121,20 @@ write_briefing:
        - Regulatory filings, lawsuits, and compliance issues
        - Customer wins, contract awards, and market share shifts
        - Stock movements and analyst upgrades/downgrades
+
+       FORMAT REQUIREMENTS FOR THIS SECTION:
+       EVERY news item MUST include a clickable source link. Use this format:
+
+       **[Date]** Brief news summary (1-2 sentences). [Read more →](URL)
+
+       Example:
+       **Feb 15, 2026** Parker Hannifin announces new hydraulic valve series with
+       20% efficiency gains, targeting mobile machinery market. [Read more →](https://parker.com/news/xyz)
+
        CRITICAL: Prioritize items tagged [NEWS (date)] from the intelligence.
-       Include specific dates and cite sources. This section shows what changed
-       in the past month and what executives need to know NOW.
+       Include specific dates and source links for EVERY item. This section shows
+       what changed in the past month - executives must be able to click through
+       to full articles.
 
     3. PRODUCT & TECHNOLOGY LANDSCAPE
        - Competitor product releases and feature updates (detailed)
@@ -165,10 +172,17 @@ write_briefing:
     executives to make concrete business decisions.
   expected_output: >
     A professional, comprehensive competitive intelligence briefing (2500+ words)
-    in markdown format with all eight sections above. Section 2 (Latest News &
-    Developments) MUST include recent news with specific dates from [NEWS (date)]
-    tagged items. Must be specific, evidence-based, and actionable for Engineering,
-    Sales, and Strategy teams. Formatted as markdown without '```'.
+    in markdown format with all eight sections above.
+
+    Section 2 (Latest News & Developments) REQUIREMENTS:
+    - MUST include recent news with specific dates from [NEWS (date)] tagged items
+    - EVERY news item MUST have format: **[Date]** Summary. [Read more →](URL)
+    - NO news item should be included without a clickable source link
+    - Dates must be specific (not "recently" or "last week")
+
+    Other sections should include source links where available for major claims.
+    Must be specific, evidence-based, and actionable for Engineering, Sales, and
+    Strategy teams. Formatted as markdown without '```'.
   agent: report_writer
   context:
     - analyze_findings
