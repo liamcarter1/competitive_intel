@@ -1,11 +1,17 @@
 import json
 import os
 import re
+import sys
 import warnings
 from datetime import datetime, timedelta
 from pathlib import Path
 from collections import defaultdict
 from threading import Lock
+
+# Ensure the src-layout package is importable on HF Spaces (no pip install)
+_src = Path(__file__).resolve().parent / "src"
+if str(_src) not in sys.path:
+    sys.path.insert(0, str(_src))
 
 from dotenv import load_dotenv
 load_dotenv()
