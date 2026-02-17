@@ -82,10 +82,16 @@ def _disambiguate_competitor(competitor: str, industry: str, company: str) -> di
                 'product category, legal entity suffix) to avoid confusion with '
                 'unrelated companies that share a similar name. Keep it concise '
                 '(2-5 words).\n'
-                '- "exclude_terms": Google search exclusion operators (e.g. '
-                '-"Atos SE" -"Eviden") to filter out the most prominent wrong-company '
-                "results. Use 2-5 exclusion phrases. If the competitor name is already "
-                "unambiguous, return an empty string.\n"
+                '- "exclude_terms": Google search exclusion operators to filter out '
+                "the most prominent WRONG-COMPANY results that share a similar name "
+                "but operate in a DIFFERENT industry. Each exclusion MUST be a quoted "
+                'phrase like -"Atos SE" -"Eviden". NEVER exclude the competitor itself, '
+                "its parent company, its own brand names, or the competing company. "
+                "NEVER use bare unquoted exclusions like -Parker. "
+                "Only exclude specific named entities from other industries that "
+                "would pollute search results. If the competitor name is already "
+                "unambiguous (e.g. 'Parker Hannifin', 'Bosch Rexroth'), return an "
+                "empty string — do NOT invent exclusions.\n"
                 '- "context": a one-sentence description of who this competitor is '
                 "(industry, products, headquarters) for use in LLM prompts.\n\n"
                 "Return ONLY valid JSON, no markdown fences, no explanation."
@@ -97,9 +103,13 @@ def _disambiguate_competitor(competitor: str, industry: str, company: str) -> di
             )},
         ])
         parsed = json.loads(response.content.strip())
+        # Normalize exclude_terms: LLM may return a list or a string
+        raw_exclude = parsed.get("exclude_terms", "")
+        if isinstance(raw_exclude, list):
+            raw_exclude = " ".join(raw_exclude)
         return {
             "search_name": parsed.get("search_name", competitor),
-            "exclude_terms": parsed.get("exclude_terms", ""),
+            "exclude_terms": raw_exclude,
             "context": parsed.get("context", ""),
         }
     except Exception as e:
