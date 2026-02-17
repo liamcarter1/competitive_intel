@@ -1,12 +1,14 @@
 ---
-title: Competitive Intel
-emoji: 📊
+title: Competitive Intelligence Monitor
+emoji: 🔍
 colorFrom: red
 colorTo: gray
 sdk: gradio
 sdk_version: 5.22.0
 app_file: competitive_intel/app.py
 pinned: false
+suggested_hardware: cpu-upgrade
+suggested_storage: small
 ---
 
 # Competitive Intelligence Monitor
