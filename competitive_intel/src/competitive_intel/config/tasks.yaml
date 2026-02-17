@@ -130,12 +130,20 @@ write_briefing:
 
        DATE FRESHNESS RULE — CRITICAL:
        Today's date is {current_date}. This section MUST ONLY contain news
-       from the past 30-45 days. Check the date on every [NEWS] item.
-       If an item's date is from a previous year or more than 45 days old,
-       DO NOT include it in this section. It is better to have fewer items
-       that are genuinely recent than to pad with outdated news. If no recent
-       news exists for a competitor, state that clearly rather than including
-       old articles.
+       from the past 30-45 days.
+
+       ONLY use items tagged [NEWS (date)] for this section. Check the date
+       on every [NEWS] item — if the date is from a previous year or more
+       than 45 days before {current_date}, DO NOT include it.
+
+       NEVER use [WEB] tagged items in this section. [WEB] results have no
+       publication date and often link to old or undated content. They belong
+       in other sections (Product & Technology, Market & Business, etc.) but
+       NOT in Latest News.
+
+       It is better to have fewer items that are genuinely recent than to pad
+       with outdated news. If no recent news exists for a competitor, state
+       that clearly rather than including old articles.
 
        FORMAT REQUIREMENTS FOR THIS SECTION:
        EVERY news item MUST include a clickable source link. Use this format:
@@ -150,7 +158,6 @@ write_briefing:
        Every [Read more →](URL) link must use an actual URL from the search data.
        NEVER invent or guess a URL. If no URL is available for a finding, omit the link.
 
-       Prioritize items tagged [NEWS (date)] from the intelligence.
        Include specific dates and source links for EVERY item. This section shows
        what changed in the past month - executives must be able to click through
        to full articles.
@@ -194,7 +201,8 @@ write_briefing:
     in markdown format with all eight sections above.
 
     Section 2 (Latest News & Developments) REQUIREMENTS:
-    - MUST include recent news with specific dates from [NEWS (date)] tagged items
+    - ONLY use [NEWS (date)] tagged items — NEVER use [WEB] items in this section
+    - Every date must be within 45 days of {current_date} — reject older items
     - EVERY news item MUST have format: **[Date]** Summary. [Read more →](URL)
     - URLs MUST come from the RAW SEARCH RESULTS section — NEVER invent a URL
     - If no real URL is available for a finding, omit the link rather than guessing

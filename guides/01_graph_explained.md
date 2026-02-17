@@ -323,7 +323,7 @@ The disambiguation and date freshness instructions are a third line of defence �
 - `scan_results`: The LLM-summarized intelligence, wrapped with a markdown heading. This feeds into the `analyze` node.
 - `raw_search_results`: The original Serper search results (with real URLs) joined into a single string, tagged with the competitor name. This bypasses the analysis pipeline entirely and flows directly to `write_briefing`, giving it access to real, clickable URLs.
 
-Remember the `operator.add` reducer on both fields? When three scan nodes run in parallel, their lists get concatenated: `["## Parker\n\n..."] + ["## Bosch\n\n..."] + ["## Eaton\n\n..."]`. The same merging happens for `raw_search_results`.
+Remember the `operator.add` reducer on both fields? When three scan nodes run in parallel, their lists get concatenated: `["## Parker\n\n..."] + ["## Bosch\n\n..."] + ["## ATOS\n\n..."]`. The same merging happens for `raw_search_results`.
 
 ---
 
@@ -337,7 +337,7 @@ def fan_out(state: GraphState) -> list[Send]:
 
 This is a **conditional entry point** — it's the first thing that runs and decides what happens next.
 
-**Line 135:** Splits the comma-separated competitors string into a clean list. `"Parker Hannifin, Bosch Rexroth, Eaton"` becomes `["Parker Hannifin", "Bosch Rexroth", "Eaton"]`. The `if c.strip()` filters out empty strings from trailing commas.
+**Line 135:** Splits the comma-separated competitors string into a clean list. `"Parker Hannifin, Bosch Rexroth, ATOS"` becomes `["Parker Hannifin", "Bosch Rexroth", "ATOS"]`. The `if c.strip()` filters out empty strings from trailing commas.
 
 **Line 136:** This is where LangGraph's parallelism magic happens. `Send("scan_competitor", {**state, "competitor": c})` creates a `Send` object that says: "Run the `scan_competitor` node with this specific state." The `{**state, "competitor": c}` creates a new dict that has everything from the current state plus the `competitor` field set to one specific competitor.
 
@@ -648,9 +648,9 @@ This is what the CLI uses. It consumes the same stream but prints progress to st
 
 ## The Execution Flow
 
-When you call `run_pipeline_stream("Danfoss", "Hydraulics", "Parker, Bosch, Eaton")`:
+When you call `run_pipeline_stream("Danfoss", "Hydraulics", "Parker, Bosch, ATOS")`:
 
-1. `fan_out` splits "Parker, Bosch, Eaton" into 3 `Send` objects
+1. `fan_out` splits "Parker, Bosch, ATOS" into 3 `Send` objects
 2. Three `scan_competitor` nodes run **in parallel**, each searching the web for one competitor and summarizing with GPT-4o
 3. As each scan completes, the stream yields a progress message like `"✓ Scanned Parker Hannifin"`
 4. Their `scan_results` and `raw_search_results` lists are **merged** via `operator.add`

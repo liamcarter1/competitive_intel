@@ -374,7 +374,7 @@ with gr.Blocks(title="Danfoss Power Solutions — Competitive Intelligence Monit
 ```python
     competitors = gr.Textbox(
         label="Competitors (comma-separated)",
-        placeholder="e.g. Parker Hannifin, Bosch Rexroth, Eaton Hydraulics",
+        placeholder="e.g. Parker Hannifin, Bosch Rexroth, ATOS",
     )
 ```
 **Lines 213-216:** This is outside the `gr.Row()` block, so it gets its own full-width row.
