@@ -109,9 +109,10 @@ Results are tagged `[NEWS (date)]` or `[WEB]` so the LLM can prioritise recent n
 2. **Code layer**: `_is_recent_news()` in `graph.py` parses each result's date string (relative like "3 days ago" or absolute like "Jan 15, 2024") and discards anything older than 45 days before it reaches the LLM
 3. **LLM layer**: The scan prompt tells the LLM today's date and instructs it to only report items as recent if their date is within 45 days. The `write_briefing` task has a DATE FRESHNESS RULE requiring the Latest News section to only contain news from the past 30-45 days.
 
-**Disambiguation also works at two layers:**
-1. **Query layer**: Every search query includes `{industry}` to anchor results to the right sector
-2. **LLM layer**: Both `scan_competitor` and `scan_annual_report` prompts include explicit disambiguation instructions telling the LLM to discard results about unrelated companies with similar names
+**Disambiguation works at three layers:**
+1. **LLM disambiguation layer**: Before any searches run, `_disambiguate_competitor()` calls gpt-4o-mini to generate a search-friendly name (e.g., "ATOS SpA hydraulic valves" instead of "ATOS"), Google exclusion operators (e.g., `-"Atos SE" -"Eviden"`), and a one-sentence identity description. This is cheap (~$0.001 per call) and dramatically improves query precision for ambiguous names.
+2. **Query layer**: Every search query uses the disambiguated search name + exclusion terms + `{industry}` to anchor results to the right company
+3. **LLM layer**: Both `scan_competitor` and `scan_annual_report` prompts include the disambiguation context sentence, giving the summarising LLM a clear identity for the competitor so it can discard wrong-company results
 
 This matters because using only the regular `/search` endpoint was the app's biggest blind spot. Google's web search returns a mix of evergreen content (company "About" pages, Wikipedia) and actual news — and the evergreen stuff often ranks higher. The `/news` endpoint cuts through that noise and surfaces the breaking developments a strategy manager actually cares about.
 
@@ -233,11 +234,15 @@ This is a useful pattern to remember: **when your pipeline uses fan-out parallel
 
 **What happened**: Searching for "ATOS" as a hydraulics competitor returned results about Atos SE, a large French IT services company. The briefing contained analysis of cloud computing strategies and digital transformation initiatives — completely irrelevant to hydraulic machinery.
 
-**Why it happened**: Seven of the nine news search queries didn't include the industry term. Queries like `"ATOS product launch release update 2026"` matched the much more prominent Atos SE (a Fortune 500 IT company) rather than ATOS the Italian hydraulics manufacturer. Google's ranking algorithm favoured the more well-known entity. The annual report queries also had one hardcoded `"hydraulic"` instead of using the `{industry}` variable.
+**Why it happened**: Seven of the nine news search queries didn't include the industry term. Queries like `"ATOS product launch release update 2026"` matched the much more prominent Atos SE (a Fortune 500 IT company) rather than ATOS the Italian hydraulics manufacturer. Google's ranking algorithm favoured the more well-known entity.
 
-**The fix**: Two layers. First, every search query now includes `{industry}` — so `"ATOS Hydraulics & Mobile Machinery product launch release update 2026"` instead of `"ATOS product launch release update 2026"`. Second, both `scan_competitor` and `scan_annual_report` now include explicit disambiguation instructions in the LLM prompt: "ATOS is a Hydraulics & Mobile Machinery company. DISCARD any results about unrelated companies with a similar name." The task description in `tasks.yaml` also has a new DISAMBIGUATION section.
+**The fix (v1)**: Added `{industry}` to every search query — so `"ATOS Hydraulics & Mobile Machinery product launch"` instead of bare `"ATOS product launch"`. This helped, but wasn't enough — Atos SE was so prominent in Google's index that even industry-qualified queries still returned wrong-company results.
 
-**The lesson**: Ambiguous entity names are a classic search problem — and it's worse with LLMs because they'll confidently summarise whatever results they get, even if half are about the wrong company. Always qualify entity names with context (industry, location, product category) in search queries. And add a second layer of defence in the LLM prompt, because even well-qualified queries occasionally return wrong results.
+**The fix (v2 — LLM-powered disambiguation)**: Added a cheap pre-scan step: `_disambiguate_competitor()` calls gpt-4o-mini with the competitor name, industry, and company context, and gets back three things: (1) a more specific search name like `"ATOS SpA hydraulic valves"`, (2) Google exclusion operators like `-"Atos SE" -"Eviden" -"IT services"`, and (3) a one-sentence identity description used in the LLM prompt. Every search query now uses the disambiguated name + exclusion terms instead of the bare competitor name. This costs ~$0.001 per competitor and dramatically cleans up results for ambiguous names while having zero effect on already-unambiguous names like "Parker Hannifin".
+
+The deep dive feature also got the same treatment — `deep_dive()` now receives company/industry/competitors context and includes it in both the query generation prompt and the synthesis prompt, so clicking "Research This" on an ATOS topic no longer generates generic queries that return 100% wrong-company results.
+
+**The lesson**: Ambiguous entity names are a classic search problem — and it's worse with LLMs because they'll confidently summarise whatever results they get, even if half are about the wrong company. When static disambiguation (adding industry terms) isn't enough, use a cheap LLM call to generate entity-specific search operators. The $0.001 cost per competitor is negligible compared to the wasted API spend and bad output quality from polluted search results.
 
 ---
 

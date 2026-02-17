@@ -34,7 +34,7 @@ User Input ──→ fan_out ─→ scan(competitor_B) ─→ fan_in ──→ a
                                                            └────────────└──────────────────────────┘
 ```
 
-- **Fan-out**: Parallel scan nodes (one per competitor), each running 9 Serper News searches (recent news, past month) + 5 Serper Web searches (broader context) then summarizing with GPT-4o. All queries include the industry term for disambiguation. News results are date-filtered (older than 45 days discarded) before reaching the LLM. The LLM prompt includes disambiguation and date freshness instructions.
+- **Fan-out**: Parallel scan nodes (one per competitor), each starting with an LLM disambiguation call (`_disambiguate_competitor()` via gpt-4o-mini) that generates a search-friendly name, Google exclusion terms, and a context sentence. Then runs 9 Serper News searches (recent news, past month) + 5 Serper Web searches (broader context) using the disambiguated name + exclusion terms, then summarizes with GPT-4o. News results are date-filtered (older than 45 days discarded) before reaching the LLM. The LLM prompt includes the disambiguation context and date freshness instructions.
 - **Fan-in**: Aggregates all scan results into shared state
 - **Sequential**: analyze (Claude Sonnet) → recommend (Claude Sonnet) → evaluate (Claude Sonnet) → write_briefing (GPT-4o-mini)
 - **Quality gate**: The evaluate node checks analysis and recommendations against rubrics. Failures route back to retry the failing node with feedback. Max 2 retries per node.
@@ -47,7 +47,7 @@ User Input ──→ fan_out_annual ─→ scan_annual_report(competitor_B) [+ i
                               └─ scan_annual_report(competitor_C) [+ inline evaluate + retry] ─┘
 ```
 
-- **Fan-out**: Parallel deep-dive report nodes (one per competitor), each running 18 Serper searches (all including industry for disambiguation) then synthesizing with Claude Sonnet. The LLM prompt includes a critical disambiguation reminder to discard results about unrelated companies.
+- **Fan-out**: Parallel deep-dive report nodes (one per competitor), each starting with the same LLM disambiguation call, then running 18 Serper searches using the disambiguated name + exclusion terms, then synthesizing with Claude Sonnet. The LLM prompt includes the disambiguation context sentence to help discard results about unrelated companies.
 - **Inline evaluation**: Each branch evaluates its own report against a quality rubric and retries up to 2 times with feedback (evaluation happens inside the node, not as a separate graph node, to preserve per-competitor granularity)
 - **Output**: Combined markdown report saved to `output/annual_report_analysis.md`
 
@@ -115,7 +115,7 @@ uv run competitive_intel   # Run the CLI pipeline
 ### Network Security
 - All external API calls (OpenAI, Anthropic, Serper) must use HTTPS. Do not downgrade to HTTP.
 - Serper has two endpoints: `/search` (web results) and `/news` (news articles with date filtering via `tbs` parameter). Both are used by the briefing scan. News results are also date-filtered in code (`_is_recent_news()` in `graph.py`) to discard stale results older than 45 days, since the `tbs` parameter is not always reliable.
-- All search queries include the industry term to prevent competitor name ambiguity (e.g., "ATOS" could match a French IT company instead of the hydraulics manufacturer). LLM prompts in both pipelines include explicit disambiguation instructions.
+- Competitor names are disambiguated via `_disambiguate_competitor()` (gpt-4o-mini) which generates search-friendly names and Google exclusion operators. All search queries use the disambiguated name + exclusion terms + industry to prevent name ambiguity. LLM prompts include the disambiguation context sentence. The deep dive feature also receives company/industry context for its query generation and synthesis prompts.
 - Set explicit timeouts on all HTTP requests (as `search_serper()` and `search_serper_news()` do with `timeout=15`).
 - Do not add proxy or redirect-following logic that could leak credentials.
 
@@ -142,15 +142,17 @@ uv run competitive_intel   # Run the CLI pipeline
 - For UI progress, use `graph.stream(stream_mode="updates")` which yields a dict after each node completes. The `run_pipeline_stream()` and `run_annual_report_pipeline_stream()` generators wrap this into `("progress", msg)` / `("result", text)` tuples that Gradio consumes via generator yields. The non-streaming `run_pipeline()` and `run_annual_report_pipeline()` are thin wrappers that print progress to stdout for CLI use.
 
 ### LLM Model Selection
+- Disambiguation: GPT-4o-mini with low temperature (0.1) — cheap per-competitor call to generate search names and exclusion terms
 - Scan nodes: GPT-4o (reliable for search result summarization; receives ~112 results from 14 searches per competitor)
 - Analyze node: Claude Sonnet (better analytical reasoning)
 - Recommend node: Claude Sonnet (better strategic synthesis)
 - Evaluate node: Claude Sonnet (rubric-based quality judgment)
-- Annual report scan nodes: Claude Sonnet (deep analytical synthesis from 15 searches)
+- Annual report scan nodes: Claude Sonnet (deep analytical synthesis from 18 searches)
 - Annual report inline evaluator: Claude Sonnet (same quality gate, runs inside each parallel branch)
 - Write briefing node: GPT-4o-mini (cost-effective for formatting)
 - Quick chat: GPT-4o-mini with low temperature (0.1)
-- Deep-dive synthesis: Claude 3.5 Sonnet with low temperature (0.1)
+- Deep-dive query generation: GPT-4o-mini (with industry context for disambiguation)
+- Deep-dive synthesis: Claude Sonnet with low temperature (0.1)
 - Model assignments are in `graph.py` node functions. Each node is independent so models can be changed freely.
 
 ### Error Handling

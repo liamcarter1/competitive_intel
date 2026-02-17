@@ -196,34 +196,44 @@ The `inputs` dict is built from state for use in prompt interpolation. This is t
 **Lines 94-95:** Build the prompts. After this, `system` contains something like "Role: Hydraulics Competitive Trend Scanner\nGoal: Find the latest competitor news..." and `desc` contains the detailed task description.
 
 ```python
+    # LLM-powered disambiguation: get a search-friendly name and exclusion terms
+    disambig = _disambiguate_competitor(competitor, industry, company)
+    sn = disambig["search_name"]  # e.g. "ATOS SpA hydraulic valves"
+    ex = disambig["exclude_terms"]  # e.g. -"Atos SE" -"Eviden"
+    ctx = disambig["context"]  # one-sentence identity for LLM prompt
+
     # ── News searches (Serper /news endpoint, filtered to past month) ────────
     news_queries = [
-        f"{competitor} {industry} news announcement {year}",
-        f"{competitor} {industry} product launch release update {year}",
-        f"{competitor} {industry} acquisition merger partnership deal {year}",
+        f"{sn} {industry} news announcement {year} {ex}",
+        f"{sn} {industry} product launch release update {year} {ex}",
+        f"{sn} {industry} acquisition merger partnership deal {year} {ex}",
         # ... 9 queries total covering news, products, M&A, pricing,
         #     customer wins, leadership, earnings, regulatory, analyst ratings
     ]
 
     # ── Web searches (Serper /search endpoint, broader context) ──────────────
     web_queries = [
-        f"{competitor} {industry} strategy expansion growth plans {year}",
-        f"{competitor} {industry} hiring jobs open roles site:linkedin.com OR site:indeed.com {year}",
+        f"{sn} {industry} strategy expansion growth plans {year} {ex}",
+        f"{sn} {industry} hiring jobs open roles site:linkedin.com OR site:indeed.com {year} {ex}",
         # ... 5 queries total covering strategy, product roadmaps,
         #     job postings, patents, regulatory/trade exposure
     ]
 ```
-**Lines 101-125:** The scan uses a **dual-endpoint strategy** — two tiers of search queries designed to catch different types of competitive intelligence:
+**Lines 101-130:** The scan uses **LLM-powered disambiguation** followed by a **dual-endpoint strategy**.
+
+**Before any searches run**, `_disambiguate_competitor()` calls gpt-4o-mini to generate three things: a more specific search name (e.g., "ATOS SpA hydraulic valves" instead of bare "ATOS"), Google exclusion operators (e.g., `-"Atos SE" -"Eviden"`), and a one-sentence company identity description. This costs ~$0.001 per competitor and dramatically improves query precision for ambiguous names. If the call fails, it falls back to the bare competitor name with no exclusions.
+
+The scan then runs two tiers of search queries designed to catch different types of competitive intelligence:
 
 1. **News queries** (9 queries): Call `search_serper_news()` which hits Serper's `/news` endpoint, filtered to the past month (`tbs="qdr:m"`). These return actual news articles sorted by recency — press releases, earnings reports, product launches, M&A, executive hires, regulatory actions, analyst coverage. Each result includes a publication date.
 
 2. **Web queries** (5 queries): Call `search_serper()` which hits the standard `/search` endpoint. These pick up broader context that news doesn't cover — job postings on LinkedIn/Indeed (leading indicator of strategy), patent filings on USPTO, regulatory exposure, and company strategy pages.
 
-**Every query includes `{industry}`.** This is essential for disambiguation. A bare search for "ATOS product launch" returns the French IT company Atos SE; adding "Hydraulics & Mobile Machinery" anchors results to the correct entity. Without industry context, ambiguous competitor names pollute results with wrong companies.
+**Every query uses the disambiguated search name + exclusion terms + `{industry}`.** This is essential for disambiguation. A bare search for "ATOS product launch" returns the French IT company Atos SE; using "ATOS SpA hydraulic valves Hydraulics & Mobile Machinery product launch -"Atos SE" -"Eviden"" anchors results to the correct entity and actively excludes the wrong one.
 
 **Why two endpoints?** The regular `/search` endpoint returns a mix of evergreen web content (Wikipedia, company "About" pages) and news, with evergreen often ranking higher. For a competitive intelligence tool, recency is everything — the `/news` endpoint cuts through the noise and surfaces breaking developments. The web queries complement this with signals that don't appear as news articles.
 
-**Why hardcode the queries instead of letting the LLM generate them?** Speed and reliability. Having the LLM generate queries would require an extra API call (adding latency and cost), and the LLM might generate vague or unhelpful queries. These templates cover the key intelligence categories comprehensively.
+**Why hardcode the queries instead of letting the LLM generate them?** Speed and reliability. Having the LLM generate queries would require an extra API call (adding latency and cost), and the LLM might generate vague or unhelpful queries. These templates cover the key intelligence categories comprehensively. The one exception is the disambiguation call, which *does* use an LLM — but it runs once per competitor (not per query) and addresses a problem that static templates can't solve.
 
 ```python
     # Run news searches (recent news articles, past month)
@@ -274,8 +284,8 @@ The `inputs` dict is built from state for use in prompt interpolation. This is t
     current_date = state["current_date"]
     user_msg = (
         f"{desc}\n\n"
-        f"DISAMBIGUATION: {competitor} is a {industry} company competing with "
-        f"{company}. DISCARD any search results about unrelated companies that "
+        f"DISAMBIGUATION: {ctx if ctx else f'{competitor} is a {industry} company competing with {company}'}. "
+        f"DISCARD any search results about unrelated companies that "
         f"happen to share a similar name but operate in a different industry. ...\n\n"
         f"DATE FRESHNESS: Today is {current_date}. For items tagged [NEWS], "
         f"only report them as recent news if the date shown is within the last "
@@ -291,10 +301,10 @@ The `inputs` dict is built from state for use in prompt interpolation. This is t
 ```
 **Lines 119-135:** The LLM call. This is the standard LangChain pattern:
 1. Create an LLM client with `_openai("gpt-4o")`.
-2. Build the user message by combining the task description, **disambiguation instructions** (telling the LLM which industry the competitor belongs to and to discard results about wrong companies), **date freshness instructions** (telling the LLM today's date and to only report genuinely recent news), the raw search results, and the expected output format.
+2. Build the user message by combining the task description, **disambiguation instructions** (using the `context` sentence from the disambiguation LLM call, which gives a precise description like "ATOS SpA is an Italian manufacturer of hydraulic valves and components, headquartered in Sesto Calende, Italy, competing with Danfoss Power Solutions"), **date freshness instructions** (telling the LLM today's date and to only report genuinely recent news), the raw search results, and the expected output format.
 3. Call `.invoke()` with a list of message dicts. The list has exactly two messages: a system message (who the agent is) and a user message (what to do). This is the **chat completions** format — system sets the persona, user provides the task.
 
-The disambiguation and date freshness instructions are a second line of defence — the search queries already include industry terms, and old results are already filtered in code, but the LLM instructions catch anything that slips through.
+The disambiguation and date freshness instructions are a third line of defence — the disambiguation LLM call already generated specific search names and exclusion terms, the search queries include industry terms, and old results are already filtered in code, but the LLM instructions catch anything that slips through.
 
 **Why GPT-4o for scanning?** It's good at summarizing search results — a relatively straightforward task. Claude Sonnet is reserved for the harder analytical work later.
 
@@ -659,13 +669,15 @@ Simpler than `GraphState` — no analysis, recommendations, or briefing fields. 
 def scan_annual_report(state: AnnualReportState) -> dict:
 ```
 
-This is the workhorse node. It does three things:
+This is the workhorse node. It does four things:
 
-1. **Web search**: Runs 15 targeted Serper queries (vs 3 in the main pipeline) covering official website, SEC filings, annual reports, LinkedIn, customer reviews, market share, M&A, patents, and more. The queries use both the current year and previous year to catch the most recent data available.
+1. **LLM disambiguation**: Calls `_disambiguate_competitor()` (same as the briefing scan) to get a search-friendly name, Google exclusion operators, and a context sentence. This is essential for the annual report too — without it, 18 searches for an ambiguous name like "ATOS" would return mostly wrong-company results.
 
-2. **LLM synthesis**: Feeds all search results to Claude Sonnet with a detailed task description requiring 15 specific sections (Company Overview, Product Portfolio, Pricing, Customers, Go-to-Market, R&D, Financials, Team, Customer Sentiment, Market Position, M&A, Geographic Presence, Patents, Regulatory Risks, Strategic Assessment).
+2. **Web search**: Runs 18 targeted Serper queries (using the disambiguated name + exclusion terms) covering official website, SEC filings, annual reports, LinkedIn, customer reviews, market share, M&A, patents, and more. The queries use both the current year and previous year to catch the most recent data available.
 
-3. **Inline evaluation + retry**: After generating the report, the node evaluates it against a quality rubric and retries up to 2 times with feedback if it fails.
+3. **LLM synthesis**: Feeds all search results to Claude Sonnet with a detailed task description requiring 15 specific sections (Company Overview, Product Portfolio, Pricing, Customers, Go-to-Market, R&D, Financials, Team, Customer Sentiment, Market Position, M&A, Geographic Presence, Patents, Regulatory Risks, Strategic Assessment). The disambiguation context sentence is included in the prompt.
+
+4. **Inline evaluation + retry**: After generating the report, the node evaluates it against a quality rubric and retries up to 2 times with feedback if it fails.
 
 ### Why Inline Evaluation (Not a Separate Graph Node)
 

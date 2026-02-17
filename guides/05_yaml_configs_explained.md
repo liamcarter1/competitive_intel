@@ -196,7 +196,7 @@ scan_competitor:
 ```
 The task description is exhaustively specific. Each bullet point is a **category of intelligence** to look for. This serves as a checklist for the LLM — it systematically addresses each category rather than focusing on whatever it finds first. The `{current_date}` placeholder ensures the agent knows what "recent" means.
 
-The **DISAMBIGUATION** instruction is critical for companies with common names. For example, "ATOS" could match the French IT company Atos SE instead of the Italian hydraulics manufacturer. This instruction tells the LLM to verify each finding belongs to the right company in the right industry.
+The **DISAMBIGUATION** instruction is critical for companies with common names. For example, "ATOS" could match the French IT company Atos SE instead of the Italian hydraulics manufacturer. This instruction tells the LLM to verify each finding belongs to the right company in the right industry. Note that `graph.py` supplements this YAML-level disambiguation with an **LLM-powered disambiguation step** (`_disambiguate_competitor()`) that runs before the searches — it generates a more specific search name, Google exclusion operators, and a context sentence that replaces the generic disambiguation text in the prompt.
 
 The description also tells the LLM that results are tagged `[NEWS]` (from Serper's `/news` endpoint) or `[WEB]` (from the standard `/search` endpoint). This lets the LLM distinguish between recent news articles and evergreen web content, and prioritise accordingly. The instruction also asks the LLM to flag findings from the past 30 days as `[RECENT]` — a useful signal for the downstream analyst node.
 
@@ -394,7 +394,7 @@ The annual report task is the longest in the codebase. Key prompt engineering pa
 
 1. **Source priority ordering**: Tells the LLM which sources to prefer (annual reports > SEC filings > company website > ...). Without this, the LLM might over-rely on generic news articles instead of primary sources.
 
-2. **Disambiguation instruction**: Company names can be ambiguous across industries. The instruction to ignore unrelated companies prevents the LLM from confusing, say, "Parker" the pen company with "Parker Hannifin" the hydraulics company.
+2. **Disambiguation instruction**: Company names can be ambiguous across industries. The instruction to ignore unrelated companies prevents the LLM from confusing, say, "Parker" the pen company with "Parker Hannifin" the hydraulics company. As with the briefing scan, `graph.py` supplements this with an LLM-generated context sentence from `_disambiguate_competitor()` that replaces the generic text with a precise company identity.
 
 3. **Anti-padding rules**: "If a section has no data, write one sentence and move on" prevents the LLM from generating paragraphs of generic industry commentary to fill empty sections. It's better to have an honest "No data available" than a padded section that looks comprehensive but says nothing.
 

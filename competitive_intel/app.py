@@ -174,6 +174,8 @@ DEEP_DIVE_SYSTEM = """You are a competitive intelligence research analyst conduc
 investigation. You have been given a user's question, the original briefing report for context,
 and fresh web search results.
 
+COMPANY CONTEXT: You are researching competitors of {company} in the {industry} industry.
+
 RULES — follow these strictly:
 1. ONLY use facts from the web search results provided below. Do not use your training knowledge.
 2. For every claim or fact, cite the source URL in parentheses immediately after the statement.
@@ -182,6 +184,8 @@ RULES — follow these strictly:
 5. Start with a brief summary, then provide detailed findings.
 6. At the end, include a "Sources" section listing all URLs referenced.
 7. Never speculate. If information is ambiguous or conflicting across sources, note that explicitly.
+8. DISAMBIGUATION: Only include information about companies that operate in the {industry} sector.
+   Discard any search results about unrelated companies that happen to share a similar name.
 
 ORIGINAL BRIEFING (for context only — prioritize fresh search results):
 {briefing}
@@ -266,7 +270,9 @@ def _search_web(queries: list[str]) -> str:
     return json.dumps(all_results, indent=2)
 
 
-def deep_dive(question: str, briefing_text: str, request: gr.Request = None) -> str:
+def deep_dive(question: str, briefing_text: str,
+              company: str = "", industry: str = "", competitors: str = "",
+              request: gr.Request = None) -> str:
     """Research a question thoroughly using live web search, grounded in sources."""
     # Check rate limit
     allowed, limit_msg = check_rate_limit(request, "deepdive", RATE_LIMIT_DEEPDIVE)
@@ -279,16 +285,35 @@ def deep_dive(question: str, briefing_text: str, request: gr.Request = None) -> 
     if not question.strip():
         return "Please enter a question to research."
 
+    # Build industry context for query generation
+    context_parts = []
+    if company:
+        context_parts.append(f"Company being analyzed: {company}")
+    if industry:
+        context_parts.append(f"Industry: {industry}")
+    if competitors:
+        context_parts.append(f"Competitors: {competitors}")
+    industry_context = "\n".join(context_parts)
+
     # Step 1: Ask the LLM to generate targeted search queries
+    query_system = (
+        "You generate web search queries for competitive intelligence research. "
+        "Given a user question and briefing context, produce 3-5 specific, varied "
+        "search queries that would find detailed, factual information. "
+        "Return ONLY a JSON array of query strings, nothing else."
+    )
+    if industry_context:
+        query_system += (
+            f"\n\nIMPORTANT CONTEXT:\n{industry_context}\n"
+            f"Include industry-specific terms in your queries to disambiguate "
+            f"company names. For example, if researching 'ATOS' in the hydraulics "
+            f"industry, use 'ATOS SpA hydraulic valves' rather than just 'ATOS'."
+        )
+
     query_response = openai_client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[
-            {"role": "system", "content": (
-                "You generate web search queries for competitive intelligence research. "
-                "Given a user question and briefing context, produce 3-5 specific, varied "
-                "search queries that would find detailed, factual information. "
-                "Return ONLY a JSON array of query strings, nothing else."
-            )},
+            {"role": "system", "content": query_system},
             {"role": "user", "content": (
                 f"Briefing context (for reference):\n{briefing_text[:3000]}\n\n"
                 f"User question: {question}\n\n"
@@ -312,6 +337,8 @@ def deep_dive(question: str, briefing_text: str, request: gr.Request = None) -> 
         max_tokens=4096,
         temperature=0.1,
         system=DEEP_DIVE_SYSTEM.format(
+            company=company or "unknown",
+            industry=industry or "unknown",
             briefing=briefing_text[:4000],
             search_results=search_results,
         ),
@@ -581,11 +608,13 @@ with gr.Blocks(title="Danfoss Power Solutions — Competitive Intelligence Monit
         _, status_msg = check_rate_limit(request, "chat", RATE_LIMIT_CHAT)
         return history, "", status_msg
 
-    def on_deep_dive(message, history, briefing_text, request: gr.Request):
+    def on_deep_dive(message, history, briefing_text, comp, ind, comps, request: gr.Request):
         if not message.strip():
             return history, "", ""
         history = history + [{"role": "user", "content": f"[Deep Dive] {message}"}]
-        answer = deep_dive(message, briefing_text, request)
+        answer = deep_dive(message, briefing_text,
+                           company=comp, industry=ind, competitors=comps,
+                           request=request)
         history = history + [{"role": "assistant", "content": answer}]
 
         # Get remaining quota
@@ -599,7 +628,7 @@ with gr.Blocks(title="Danfoss Power Solutions — Competitive Intelligence Monit
     )
     dive_btn.click(
         fn=on_deep_dive,
-        inputs=[chat_input, chatbot, briefing_state],
+        inputs=[chat_input, chatbot, briefing_state, company, industry, competitors],
         outputs=[chatbot, chat_input, chat_status],
     )
 

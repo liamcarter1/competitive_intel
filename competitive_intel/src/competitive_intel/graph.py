@@ -62,6 +62,51 @@ def _is_recent_news(date_str: str, max_age_days: int = NEWS_MAX_AGE_DAYS) -> boo
     return (datetime.now() - parsed).days <= max_age_days
 
 
+def _disambiguate_competitor(competitor: str, industry: str, company: str) -> dict:
+    """Use gpt-4o-mini to generate a search-friendly name, Google exclusion terms,
+    and a one-sentence identity description for a competitor.
+
+    Returns {"search_name": str, "exclude_terms": str, "context": str}.
+    Falls back to bare competitor name on any failure.
+    """
+    fallback = {"search_name": competitor, "exclude_terms": "", "context": ""}
+    try:
+        llm = _openai("gpt-4o-mini", temperature=0.1)
+        response = llm.invoke([
+            {"role": "system", "content": (
+                "You help disambiguate company names for Google searches. "
+                "Given a competitor name, the industry it operates in, and the company "
+                "it competes with, return a JSON object with exactly three keys:\n"
+                '- "search_name": a more specific, search-friendly version of the '
+                "competitor name that adds identifying details (e.g. parent company, "
+                'product category, legal entity suffix) to avoid confusion with '
+                'unrelated companies that share a similar name. Keep it concise '
+                '(2-5 words).\n'
+                '- "exclude_terms": Google search exclusion operators (e.g. '
+                '-"Atos SE" -"Eviden") to filter out the most prominent wrong-company '
+                "results. Use 2-5 exclusion phrases. If the competitor name is already "
+                "unambiguous, return an empty string.\n"
+                '- "context": a one-sentence description of who this competitor is '
+                "(industry, products, headquarters) for use in LLM prompts.\n\n"
+                "Return ONLY valid JSON, no markdown fences, no explanation."
+            )},
+            {"role": "user", "content": (
+                f"Competitor: {competitor}\n"
+                f"Industry: {industry}\n"
+                f"Competing with: {company}"
+            )},
+        ])
+        parsed = json.loads(response.content.strip())
+        return {
+            "search_name": parsed.get("search_name", competitor),
+            "exclude_terms": parsed.get("exclude_terms", ""),
+            "context": parsed.get("context", ""),
+        }
+    except Exception as e:
+        print(f"[disambiguate] WARNING: Failed for {competitor}: {e}. Using bare name.")
+        return fallback
+
+
 # ── State ────────────────────────────────────────────────────────────────────
 
 class GraphState(TypedDict):
@@ -137,26 +182,33 @@ def scan_competitor(state: ScanState) -> dict:
     industry = state["industry"]
     company = state["company"]
 
+    # LLM-powered disambiguation: get a search-friendly name and exclusion terms
+    disambig = _disambiguate_competitor(competitor, industry, company)
+    sn = disambig["search_name"]  # e.g. "ATOS SpA hydraulic valves"
+    ex = disambig["exclude_terms"]  # e.g. -"Atos SE" -"Eviden"
+    ctx = disambig["context"]  # one-sentence identity for LLM prompt
+    print(f"[scan] {competitor} disambiguation: search_name={sn!r}, exclude={ex!r}")
+
     # ── News searches (Serper /news endpoint, filtered to past month) ────────
     news_queries = [
-        f"{competitor} {industry} news announcement {year}",
-        f"{competitor} {industry} product launch release update {year}",
-        f"{competitor} {industry} acquisition merger partnership deal {year}",
-        f"{competitor} {industry} pricing changes new model tier {year}",
-        f"{competitor} {industry} customer win contract award {year}",
-        f"{competitor} {industry} executive appointment leadership hire {year}",
-        f"{competitor} {industry} earnings revenue financial results {year}",
-        f"{competitor} {industry} regulatory lawsuit patent filing {year}",
-        f"{competitor} {industry} stock analyst upgrade downgrade guidance {year}",
+        f"{sn} {industry} news announcement {year} {ex}",
+        f"{sn} {industry} product launch release update {year} {ex}",
+        f"{sn} {industry} acquisition merger partnership deal {year} {ex}",
+        f"{sn} {industry} pricing changes new model tier {year} {ex}",
+        f"{sn} {industry} customer win contract award {year} {ex}",
+        f"{sn} {industry} executive appointment leadership hire {year} {ex}",
+        f"{sn} {industry} earnings revenue financial results {year} {ex}",
+        f"{sn} {industry} regulatory lawsuit patent filing {year} {ex}",
+        f"{sn} {industry} stock analyst upgrade downgrade guidance {year} {ex}",
     ]
 
     # ── Web searches (Serper /search endpoint, broader context) ──────────────
     web_queries = [
-        f"{competitor} {industry} strategy expansion growth plans {year}",
-        f"{competitor} {industry} new product features roadmap {year}",
-        f"{competitor} {industry} hiring jobs open roles site:linkedin.com OR site:indeed.com {year}",
-        f"{competitor} {industry} patent USPTO OR Espacenet {year}",
-        f"{competitor} {industry} tariff trade regulatory compliance {year}",
+        f"{sn} {industry} strategy expansion growth plans {year} {ex}",
+        f"{sn} {industry} new product features roadmap {year} {ex}",
+        f"{sn} {industry} hiring jobs open roles site:linkedin.com OR site:indeed.com {year} {ex}",
+        f"{sn} {industry} patent USPTO OR Espacenet {year} {ex}",
+        f"{sn} {industry} tariff trade regulatory compliance {year} {ex}",
     ]
 
     all_results = []
@@ -198,8 +250,8 @@ def scan_competitor(state: ScanState) -> dict:
     current_date = state["current_date"]
     user_msg = (
         f"{desc}\n\n"
-        f"DISAMBIGUATION: {competitor} is a {industry} company competing with "
-        f"{company}. DISCARD any search results about unrelated companies that "
+        f"DISAMBIGUATION: {ctx if ctx else f'{competitor} is a {industry} company competing with {company}'}. "
+        f"DISCARD any search results about unrelated companies that "
         f"happen to share a similar name but operate in a different industry. "
         f"Only include findings you can confidently attribute to {competitor} "
         f"in the {industry} sector.\n\n"
@@ -548,25 +600,33 @@ def scan_annual_report(state: AnnualReportState) -> dict:
 
     company = state["company"]
     industry = state["industry"]
+
+    # LLM-powered disambiguation
+    disambig = _disambiguate_competitor(competitor, industry, company)
+    sn = disambig["search_name"]
+    ex = disambig["exclude_terms"]
+    ctx = disambig["context"]
+    print(f"[scan_annual_report] {competitor} disambiguation: search_name={sn!r}, exclude={ex!r}")
+
     queries = [
-        f"{competitor} {industry} official website products solutions",
-        f"{competitor} {industry} about company revenue employees",
-        f"{competitor} {industry} latest annual report {year} OR {prev_year}",
-        f"{competitor} {industry} 10-K SEC filing investor relations {year} OR {prev_year}",
-        f"{competitor} {industry} earnings revenue financial results {year} OR {prev_year}",
-        f"{competitor} {industry} product catalog pricing customers case studies",
-        f"{competitor} {industry} LinkedIn employees hiring jobs {year}",
-        f"{competitor} {industry} customer reviews complaints {year}",
-        f"{competitor} {industry} market share ranking {year} OR {prev_year}",
-        f"{competitor} {industry} acquisition merger partnership {year} OR {prev_year}",
-        f"{competitor} {industry} revenue by region geographic expansion {year} OR {prev_year}",
-        f"{competitor} {industry} OEM contracts customer wins {year}",
-        f"{competitor} {industry} patent USPTO OR Espacenet {year} OR {prev_year}",
-        f"{competitor} {industry} tariff regulatory compliance risk {year}",
-        f"{competitor} {industry} news press release announcement {year}",
-        f"{competitor} {industry} product catalog model series specifications datasheet",
-        f"{competitor} vs {company} {industry} comparison review",
-        f"{competitor} {industry} OEM customer wins named accounts case study",
+        f"{sn} {industry} official website products solutions {ex}",
+        f"{sn} {industry} about company revenue employees {ex}",
+        f"{sn} {industry} latest annual report {year} OR {prev_year} {ex}",
+        f"{sn} {industry} 10-K SEC filing investor relations {year} OR {prev_year} {ex}",
+        f"{sn} {industry} earnings revenue financial results {year} OR {prev_year} {ex}",
+        f"{sn} {industry} product catalog pricing customers case studies {ex}",
+        f"{sn} {industry} LinkedIn employees hiring jobs {year} {ex}",
+        f"{sn} {industry} customer reviews complaints {year} {ex}",
+        f"{sn} {industry} market share ranking {year} OR {prev_year} {ex}",
+        f"{sn} {industry} acquisition merger partnership {year} OR {prev_year} {ex}",
+        f"{sn} {industry} revenue by region geographic expansion {year} OR {prev_year} {ex}",
+        f"{sn} {industry} OEM contracts customer wins {year} {ex}",
+        f"{sn} {industry} patent USPTO OR Espacenet {year} OR {prev_year} {ex}",
+        f"{sn} {industry} tariff regulatory compliance risk {year} {ex}",
+        f"{sn} {industry} news press release announcement {year} {ex}",
+        f"{sn} {industry} product catalog model series specifications datasheet {ex}",
+        f"{competitor} vs {company} {industry} comparison review {ex}",
+        f"{sn} {industry} OEM customer wins named accounts case study {ex}",
     ]
 
     all_results = []
@@ -585,8 +645,9 @@ def scan_annual_report(state: AnnualReportState) -> dict:
     llm = _claude()
     user_msg = (
         f"{desc}\n\n"
-        f"CRITICAL DISAMBIGUATION REMINDER: {competitor} is a {industry} company "
-        f"competing with {company}. Many search results below may be about a "
+        f"CRITICAL DISAMBIGUATION REMINDER: "
+        f"{ctx if ctx else f'{competitor} is a {industry} company competing with {company}'}. "
+        f"Many search results below may be about a "
         f"DIFFERENT company with a similar name in another industry. You MUST "
         f"discard any result that is not about {competitor} in the {industry} "
         f"sector. When in doubt, leave it out.\n\n"
