@@ -551,7 +551,7 @@ with gr.Blocks(title="Danfoss Power Solutions — Competitive Intelligence Monit
         elem_classes="rate-limit-info"
     )
 
-    chatbot = gr.Chatbot(label="Briefing Q&A", height=400)
+    chatbot = gr.Chatbot(label="Briefing Q&A", height=400, type="messages")
     chat_input = gr.Textbox(
         label="Your question",
         placeholder="e.g. What are the key product changes from Parker this quarter?",
