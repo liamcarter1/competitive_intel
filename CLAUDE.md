@@ -34,9 +34,9 @@ User Input ──→ fan_out ─→ scan(competitor_B) ─→ fan_in ──→ a
                                                            └────────────└──────────────────────────┘
 ```
 
-- **Fan-out**: Parallel scan nodes (one per competitor), each starting with an LLM disambiguation call (`_disambiguate_competitor()` via gpt-4o-mini) that generates a search-friendly name, Google exclusion terms, and a context sentence. Then runs 9 Serper News searches (recent news, past month) + 5 Serper Web searches (broader context) using the disambiguated name + exclusion terms, then summarizes with GPT-4o. News results are date-filtered (older than 45 days discarded) before reaching the LLM. The LLM prompt includes the disambiguation context and date freshness instructions.
-- **Fan-in**: Aggregates all scan results into shared state
-- **Sequential**: analyze (Claude Sonnet) → recommend (Claude Sonnet) → evaluate (Claude Sonnet) → write_briefing (GPT-4o-mini)
+- **Fan-out**: Parallel scan nodes (one per competitor), each starting with an LLM disambiguation call (`_disambiguate_competitor()` via gpt-4o-mini) that generates a search-friendly name, Google exclusion terms, and a context sentence. Then runs 9 Serper News searches (recent news, past month) + 5 Serper Web searches (broader context) using the disambiguated name + exclusion terms, then summarizes with GPT-4o. News results are date-filtered (older than 45 days discarded) before reaching the LLM. The LLM prompt includes the disambiguation context and date freshness instructions. Each scan node also returns the raw Serper results (with real URLs) in `raw_search_results`, which bypasses the LLM summarization and flows directly to `write_briefing`.
+- **Fan-in**: Aggregates all scan results and raw search results into shared state
+- **Sequential**: analyze (Claude Sonnet) → recommend (Claude Sonnet) → evaluate (Claude Sonnet) → write_briefing (GPT-4o-mini, receives analysis + recommendations + raw search results with real URLs)
 - **Quality gate**: The evaluate node checks analysis and recommendations against rubrics. Failures route back to retry the failing node with feedback. Max 2 retries per node.
 
 ### Annual Report Pipeline Graph
@@ -138,7 +138,7 @@ uv run competitive_intel   # Run the CLI pipeline
 - Each graph node in `graph.py` loads its prompts from these YAML configs, interpolates input variables, and makes a direct LLM call.
 - The graph uses `Send()` for fan-out (parallel competitor scans) and sequential edges for the analysis pipeline.
 - Each node constructs its own message list (system + user) — never pass message history between nodes.
-- State is shared via a `GraphState` TypedDict. Use `Annotated[list, operator.add]` for fields that accumulate across parallel nodes (e.g., `scan_results`).
+- State is shared via a `GraphState` TypedDict. Use `Annotated[list, operator.add]` for fields that accumulate across parallel nodes (e.g., `scan_results`, `raw_search_results`).
 - For UI progress, use `graph.stream(stream_mode="updates")` which yields a dict after each node completes. The `run_pipeline_stream()` and `run_annual_report_pipeline_stream()` generators wrap this into `("progress", msg)` / `("result", text)` tuples that Gradio consumes via generator yields. The non-streaming `run_pipeline()` and `run_annual_report_pipeline()` are thin wrappers that print progress to stdout for CLI use.
 
 ### LLM Model Selection
@@ -149,7 +149,7 @@ uv run competitive_intel   # Run the CLI pipeline
 - Evaluate node: Claude Sonnet (rubric-based quality judgment)
 - Annual report scan nodes: Claude Sonnet (deep analytical synthesis from 18 searches)
 - Annual report inline evaluator: Claude Sonnet (same quality gate, runs inside each parallel branch)
-- Write briefing node: GPT-4o-mini (cost-effective for formatting)
+- Write briefing node: GPT-4o-mini (cost-effective for formatting; receives raw search results with real URLs to prevent hallucinated links)
 - Quick chat: GPT-4o-mini with low temperature (0.1)
 - Deep-dive query generation: GPT-4o-mini (with industry context for disambiguation)
 - Deep-dive synthesis: Claude Sonnet with low temperature (0.1)

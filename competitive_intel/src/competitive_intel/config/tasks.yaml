@@ -146,7 +146,11 @@ write_briefing:
        **Feb 15, 2026** Parker Hannifin announces new hydraulic valve series with
        20% efficiency gains, targeting mobile machinery market. [Read more →](https://parker.com/news/xyz)
 
-       CRITICAL: Prioritize items tagged [NEWS (date)] from the intelligence.
+       CRITICAL: Extract URLs ONLY from the RAW SEARCH RESULTS section below.
+       Every [Read more →](URL) link must use an actual URL from the search data.
+       NEVER invent or guess a URL. If no URL is available for a finding, omit the link.
+
+       Prioritize items tagged [NEWS (date)] from the intelligence.
        Include specific dates and source links for EVERY item. This section shows
        what changed in the past month - executives must be able to click through
        to full articles.
@@ -192,6 +196,8 @@ write_briefing:
     Section 2 (Latest News & Developments) REQUIREMENTS:
     - MUST include recent news with specific dates from [NEWS (date)] tagged items
     - EVERY news item MUST have format: **[Date]** Summary. [Read more →](URL)
+    - URLs MUST come from the RAW SEARCH RESULTS section — NEVER invent a URL
+    - If no real URL is available for a finding, omit the link rather than guessing
     - NO news item should be included without a clickable source link
     - Dates must be specific (not "recently" or "last week")
 

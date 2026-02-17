@@ -4,6 +4,7 @@ import json
 import operator
 import os
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Annotated, TypedDict
@@ -29,6 +30,13 @@ TASKS_CONFIG = _load_yaml("tasks.yaml")
 
 # Maximum age (in days) for news results — anything older is discarded.
 NEWS_MAX_AGE_DAYS = 45
+
+# Max concurrent Serper search threads per scan node.
+_SEARCH_WORKERS = 10
+
+# Cache disambiguation results so the same competitor isn't re-disambiguated
+# if both the briefing and annual-report pipelines run in the same process.
+_DISAMBIG_CACHE: dict[tuple, dict] = {}
 
 _RELATIVE_RE = re.compile(r"(\d+)\s+(minute|hour|day|week|month|year)s?\s+ago", re.I)
 
@@ -69,6 +77,11 @@ def _disambiguate_competitor(competitor: str, industry: str, company: str) -> di
     Returns {"search_name": str, "exclude_terms": str, "context": str}.
     Falls back to bare competitor name on any failure.
     """
+    cache_key = (competitor, industry, company)
+    if cache_key in _DISAMBIG_CACHE:
+        print(f"[disambiguate] Cache hit for {competitor}")
+        return _DISAMBIG_CACHE[cache_key]
+
     fallback = {"search_name": competitor, "exclude_terms": "", "context": ""}
     try:
         llm = _openai("gpt-4o-mini", temperature=0.1)
@@ -107,11 +120,13 @@ def _disambiguate_competitor(competitor: str, industry: str, company: str) -> di
         raw_exclude = parsed.get("exclude_terms", "")
         if isinstance(raw_exclude, list):
             raw_exclude = " ".join(raw_exclude)
-        return {
+        result = {
             "search_name": parsed.get("search_name", competitor),
             "exclude_terms": raw_exclude,
             "context": parsed.get("context", ""),
         }
+        _DISAMBIG_CACHE[cache_key] = result
+        return result
     except Exception as e:
         print(f"[disambiguate] WARNING: Failed for {competitor}: {e}. Using bare name.")
         return fallback
@@ -125,6 +140,7 @@ class GraphState(TypedDict):
     competitors: str
     current_date: str
     scan_results: Annotated[list[str], operator.add]
+    raw_search_results: Annotated[list[str], operator.add]
     analysis: str
     recommendations: str
     briefing: str
@@ -170,6 +186,7 @@ class ScanState(TypedDict):
     current_date: str
     competitor: str
     scan_results: Annotated[list[str], operator.add]
+    raw_search_results: Annotated[list[str], operator.add]
     analysis: str
     recommendations: str
     briefing: str
@@ -222,36 +239,54 @@ def scan_competitor(state: ScanState) -> dict:
     ]
 
     all_results = []
-
-    # Run news searches (recent news articles, past month)
     skipped_old = 0
-    for q in news_queries:
+
+    def _fetch_news(q):
+        """Fetch a single news query, return (results_list, skipped_count)."""
+        results, skipped = [], 0
         try:
             data = search_serper_news(q, num_results=10, tbs="qdr:m")
             for item in data.get("news", [])[:8]:
                 date = item.get("date", "")
                 if not _is_recent_news(date):
-                    skipped_old += 1
+                    skipped += 1
                     continue
                 date_str = f" ({date})" if date else ""
-                all_results.append(
+                results.append(
                     f"- [NEWS{date_str}] [{item.get('title', '')}]({item.get('link', '')}): {item.get('snippet', '')}"
                 )
         except Exception as e:
-            all_results.append(f"- News search error for '{q}': {e}")
-    if skipped_old:
-        print(f"[scan] {competitor}: filtered out {skipped_old} news results older than {NEWS_MAX_AGE_DAYS} days")
+            results.append(f"- News search error for '{q}': {e}")
+        return results, skipped
 
-    # Run web searches (broader context, top 8 per query)
-    for q in web_queries:
+    def _fetch_web(q):
+        """Fetch a single web query, return results_list."""
+        results = []
         try:
             data = search_serper(q)
             for item in data.get("organic", [])[:8]:
-                all_results.append(
+                results.append(
                     f"- [WEB] [{item.get('title', '')}]({item.get('link', '')}): {item.get('snippet', '')}"
                 )
         except Exception as e:
-            all_results.append(f"- Search error for '{q}': {e}")
+            results.append(f"- Search error for '{q}': {e}")
+        return results
+
+    # Run all news + web searches concurrently
+    with ThreadPoolExecutor(max_workers=_SEARCH_WORKERS) as executor:
+        news_futures = {executor.submit(_fetch_news, q): q for q in news_queries}
+        web_futures = {executor.submit(_fetch_web, q): q for q in web_queries}
+
+        for future in as_completed(news_futures):
+            results, skipped = future.result()
+            all_results.extend(results)
+            skipped_old += skipped
+
+        for future in as_completed(web_futures):
+            all_results.extend(future.result())
+
+    if skipped_old:
+        print(f"[scan] {competitor}: filtered out {skipped_old} news results older than {NEWS_MAX_AGE_DAYS} days")
 
     search_context = "\n".join(all_results) if all_results else "No search results found."
 
@@ -279,7 +314,11 @@ def scan_competitor(state: ScanState) -> dict:
         {"role": "user", "content": user_msg},
     ])
     print(f"[scan] Finished scanning {competitor} (gpt-4o) — {len(all_results)} results from {len(news_queries)} news + {len(web_queries)} web queries")
-    return {"scan_results": [f"## {competitor}\n\n{response.content}"]}
+    raw_block = f"## {competitor} — Raw Search Results\n\n" + "\n".join(all_results)
+    return {
+        "scan_results": [f"## {competitor}\n\n{response.content}"],
+        "raw_search_results": [raw_block],
+    }
 
 
 def fan_out(state: GraphState) -> list[Send]:
@@ -380,6 +419,8 @@ def write_briefing(state: GraphState) -> dict:
     system = _agent_system_prompt("report_writer", inputs)
     desc, expected = _task_prompt("write_briefing", inputs)
 
+    raw_text = "\n\n---\n\n".join(state.get("raw_search_results", []))
+
     llm = _openai("gpt-4o-mini")
     response = llm.invoke([
         {"role": "system", "content": system},
@@ -387,6 +428,9 @@ def write_briefing(state: GraphState) -> dict:
             f"{desc}\n\n"
             f"COMPETITIVE ANALYSIS:\n\n{state['analysis']}\n\n"
             f"STRATEGIC RECOMMENDATIONS:\n\n{state['recommendations']}\n\n"
+            f"RAW SEARCH RESULTS WITH SOURCE URLS:\n"
+            f"Use these for the Latest News section — extract real URLs, do NOT invent URLs.\n\n"
+            f"{raw_text}\n\n"
             f"Expected output format:\n{expected}"
         )},
     ])
@@ -518,6 +562,7 @@ def run_pipeline_stream(company: str, industry: str, competitors: str):
         "competitors": competitors,
         "current_date": datetime.now().strftime("%Y-%m-%d"),
         "scan_results": [],
+        "raw_search_results": [],
         "analysis": "",
         "recommendations": "",
         "briefing": "",
@@ -639,16 +684,24 @@ def scan_annual_report(state: AnnualReportState) -> dict:
         f"{sn} {industry} OEM customer wins named accounts case study {ex}",
     ]
 
-    all_results = []
-    for q in queries:
+    def _fetch_annual(q):
+        """Fetch a single web query for annual report, return results_list."""
+        results = []
         try:
             data = search_serper(q)
             for item in data.get("organic", [])[:5]:
-                all_results.append(
+                results.append(
                     f"- [{item.get('title', '')}]({item.get('link', '')}): {item.get('snippet', '')}"
                 )
         except Exception as e:
-            all_results.append(f"- Search error for '{q}': {e}")
+            results.append(f"- Search error for '{q}': {e}")
+        return results
+
+    all_results = []
+    with ThreadPoolExecutor(max_workers=_SEARCH_WORKERS) as executor:
+        futures = {executor.submit(_fetch_annual, q): q for q in queries}
+        for future in as_completed(futures):
+            all_results.extend(future.result())
 
     search_context = "\n".join(all_results) if all_results else "No search results found."
 

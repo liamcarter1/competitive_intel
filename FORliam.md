@@ -104,6 +104,8 @@ The briefing scan uses **two Serper endpoints** to get the best of both worlds:
 
 Results are tagged `[NEWS (date)]` or `[WEB]` so the LLM can prioritise recent news over older web content. The task prompt explicitly instructs the LLM to flag findings from the past 30 days as `[RECENT]`.
 
+**Raw search results are threaded directly to the report writer.** The scan nodes return two things: (1) the LLM summary in `scan_results` (used by the analysis pipeline), and (2) the original Serper results with real URLs in `raw_search_results` (used by `write_briefing`). This prevents the report writer from hallucinating URLs — it has access to every real URL that came back from Serper, even though the intermediate analysis nodes never see this raw data. The task prompt explicitly instructs the writer to extract URLs from this raw data and never invent links.
+
 **Three layers of freshness defence** keep stale news out of the briefing:
 1. **API layer**: `tbs="qdr:m"` hint to Serper (unreliable but helps)
 2. **Code layer**: `_is_recent_news()` in `graph.py` parses each result's date string (relative like "3 days ago" or absolute like "Jan 15, 2024") and discards anything older than 45 days before it reaches the LLM
@@ -243,6 +245,24 @@ This is a useful pattern to remember: **when your pipeline uses fan-out parallel
 The deep dive feature also got the same treatment — `deep_dive()` now receives company/industry/competitors context and includes it in both the query generation prompt and the synthesis prompt, so clicking "Research This" on an ATOS topic no longer generates generic queries that return 100% wrong-company results.
 
 **The lesson**: Ambiguous entity names are a classic search problem — and it's worse with LLMs because they'll confidently summarise whatever results they get, even if half are about the wrong company. When static disambiguation (adding industry terms) isn't enough, use a cheap LLM call to generate entity-specific search operators. The $0.001 cost per competitor is negligible compared to the wasted API spend and bad output quality from polluted search results.
+
+### Bug 7: The Hallucinated URLs in the Briefing
+
+**What happened**: The "Latest News & Developments" section of the briefing contained plausible-looking URLs that didn't actually exist. Clicking them returned 404 errors. The URLs looked realistic — correct domain names, reasonable paths — but they were fabricated by the LLM.
+
+**Why it happened**: The `write_briefing` node (GPT-4o-mini) was asked to produce `[Read more →](URL)` links for every news item, but it never had access to the original search results. Here's the data flow:
+
+1. `scan_competitor` gets real URLs from Serper, feeds them to GPT-4o → some URLs survive in the summary, some don't
+2. `analyze` reads the scan summaries (already 1 LLM hop from real data), produces analysis → URLs further degraded
+3. `write_briefing` reads analysis + recommendations (2-3 LLM hops from real URLs) → no real URLs left, but the prompt *demands* clickable links
+
+When you tell an LLM "every news item MUST have a source link" but give it no real URLs to work with, it does what LLMs do: it confidently generates plausible-looking URLs that don't exist. The domain names and path patterns looked right because the LLM had seen real URLs from those domains during training — it was pattern-matching, not citing.
+
+**The fix**: Added a `raw_search_results` field to the graph state that carries the original Serper results (with real URLs) directly from `scan_competitor()` to `write_briefing()`, bypassing all intermediate LLM summarization hops. The write_briefing prompt explicitly says "Extract URLs ONLY from the RAW SEARCH RESULTS section — NEVER invent or guess a URL." The task YAML was updated with the same instruction in both the description and expected output.
+
+The key insight: `raw_search_results` uses the same `Annotated[list[str], operator.add]` reducer as `scan_results`, so results from parallel scan nodes get merged automatically. But unlike `scan_results` (which holds LLM-summarized text), `raw_search_results` holds the original search data untouched — it's a direct pipe from Serper to the report writer.
+
+**The lesson**: When your pipeline has multiple LLM hops, specific data (URLs, numbers, dates) degrades with each hop. LLMs are lossy compressors — they preserve meaning but not exact details. If downstream nodes need exact data from upstream sources, thread that data through the state directly rather than expecting it to survive LLM summarization. This is the same principle as passing structured data alongside natural language in any pipeline: don't rely on prose to preserve machine-readable information.
 
 ---
 

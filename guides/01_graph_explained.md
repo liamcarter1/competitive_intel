@@ -88,6 +88,7 @@ class GraphState(TypedDict):
     competitors: str
     current_date: str
     scan_results: Annotated[list[str], operator.add]
+    raw_search_results: Annotated[list[str], operator.add]
     analysis: str
     recommendations: str
     briefing: str
@@ -97,13 +98,14 @@ class GraphState(TypedDict):
     retry_count_recommendations: int
 ```
 
-**Lines 32-44:** `GraphState` defines **everything the graph knows**. Every node receives this state and can read from or write to it. Think of it as a shared whiteboard that all the agents can see.
+**Lines 32-45:** `GraphState` defines **everything the graph knows**. Every node receives this state and can read from or write to it. Think of it as a shared whiteboard that all the agents can see.
 
 - `company`, `industry`, `competitors`, `current_date` (lines 33-36): **Input fields.** These are set once at the start and never changed. Every node reads them to know what it's working on.
-- `scan_results` (line 37): **This is the most interesting field.** The `Annotated[list[str], operator.add]` syntax is LangGraph's **reducer pattern**. Here's the problem it solves: when multiple scan nodes run in parallel (one per competitor), they each return a `scan_results` list. How should LangGraph combine them? Without a reducer, the last one to finish would overwrite the others. The `operator.add` reducer tells LangGraph: "concatenate all the lists together." So if scan_A returns `["result_A"]` and scan_B returns `["result_B"]`, the final state has `scan_results = ["result_A", "result_B"]`. This is the core mechanism that makes fan-out/fan-in work.
-- `analysis`, `recommendations`, `briefing` (lines 38-40): **Output fields.** Each sequential node fills in one of these. They're just regular strings — no reducer needed because only one node writes to each.
-- `evaluation_result`, `evaluation_feedback` (lines 41-42): **Evaluator fields.** The evaluate node writes its verdict here (`"pass"`, `"fail_analysis"`, `"fail_recommendations"`, or `"fail_both"`) along with specific feedback. The analyze and recommend nodes read these on retries to know what to fix.
-- `retry_count_analysis`, `retry_count_recommendations` (lines 43-44): **Retry counters.** Track how many times each node has been retried. Used by the routing logic to enforce the max retry cap (2 per node).
+- `scan_results` (line 37): **This is one of the most interesting fields.** The `Annotated[list[str], operator.add]` syntax is LangGraph's **reducer pattern**. Here's the problem it solves: when multiple scan nodes run in parallel (one per competitor), they each return a `scan_results` list. How should LangGraph combine them? Without a reducer, the last one to finish would overwrite the others. The `operator.add` reducer tells LangGraph: "concatenate all the lists together." So if scan_A returns `["result_A"]` and scan_B returns `["result_B"]`, the final state has `scan_results = ["result_A", "result_B"]`. This is the core mechanism that makes fan-out/fan-in work.
+- `raw_search_results` (line 38): **The URL preservation channel.** Uses the same `operator.add` reducer as `scan_results`. Each scan node returns the original Serper search results (with real URLs) here, bypassing LLM summarization. This data flows directly from `scan_competitor` to `write_briefing`, giving the report writer access to real, clickable URLs instead of forcing it to hallucinate them. The intermediate nodes (`analyze`, `recommend`, `evaluate`) ignore this field entirely — it's a direct pipe.
+- `analysis`, `recommendations`, `briefing` (lines 39-41): **Output fields.** Each sequential node fills in one of these. They're just regular strings — no reducer needed because only one node writes to each.
+- `evaluation_result`, `evaluation_feedback` (lines 42-43): **Evaluator fields.** The evaluate node writes its verdict here (`"pass"`, `"fail_analysis"`, `"fail_recommendations"`, or `"fail_both"`) along with specific feedback. The analyze and recommend nodes read these on retries to know what to fix.
+- `retry_count_analysis`, `retry_count_recommendations` (lines 44-45): **Retry counters.** Track how many times each node has been retried. Used by the routing logic to enforce the max retry cap (2 per node).
 
 **Why TypedDict and not a regular class?** LangGraph requires state to be a TypedDict (or a Pydantic BaseModel). TypedDict is essentially a type-annotated dictionary — it gives you IDE autocomplete and type checking while keeping the simplicity of dict access (`state["company"]`). LangGraph inspects these annotations at graph compile time to know which fields exist and which have reducers.
 
@@ -168,11 +170,12 @@ class ScanState(TypedDict):
     current_date: str
     competitor: str
     scan_results: Annotated[list[str], operator.add]
+    raw_search_results: Annotated[list[str], operator.add]
     analysis: str
     recommendations: str
     briefing: str
 ```
-**Lines 72-81:** `ScanState` extends `GraphState` with one extra field: `competitor` (singular, line 77). When `fan_out` sends work to `scan_competitor`, it adds a `competitor` field specifying which single competitor this particular scan should focus on. LangGraph needs to know the full state shape for type checking, so `ScanState` includes everything from `GraphState` plus the extra field.
+**Lines 72-82:** `ScanState` extends `GraphState` with one extra field: `competitor` (singular, line 77). When `fan_out` sends work to `scan_competitor`, it adds a `competitor` field specifying which single competitor this particular scan should focus on. LangGraph needs to know the full state shape for type checking, so `ScanState` includes everything from `GraphState` plus the extra field. Note that `raw_search_results` is included here with the same `operator.add` reducer — each parallel scan node returns its raw Serper results, and LangGraph concatenates them into a single list.
 
 ```python
 def scan_competitor(state: ScanState) -> dict:
@@ -310,9 +313,17 @@ The disambiguation and date freshness instructions are a third line of defence �
 
 ```python
     print(f"[scan] Finished scanning {competitor} (gpt-4o)")
-    return {"scan_results": [f"## {competitor}\n\n{response.content}"]}
+    raw_block = f"## {competitor} — Raw Search Results\n\n" + "\n".join(all_results)
+    return {
+        "scan_results": [f"## {competitor}\n\n{response.content}"],
+        "raw_search_results": [raw_block],
+    }
 ```
-**Lines 130-131:** The return value is crucial. It returns a dict with only `scan_results` — the one field this node updates. The value is a **list with one element** (the summary wrapped with a markdown heading). Remember the `operator.add` reducer on `scan_results`? When three scan nodes run in parallel, their lists get concatenated: `["## Parker\n\n..."] + ["## Bosch\n\n..."] + ["## Eaton\n\n..."]`.
+**Lines 130-135:** The return value is crucial. It returns a dict with two fields:
+- `scan_results`: The LLM-summarized intelligence, wrapped with a markdown heading. This feeds into the `analyze` node.
+- `raw_search_results`: The original Serper search results (with real URLs) joined into a single string, tagged with the competitor name. This bypasses the analysis pipeline entirely and flows directly to `write_briefing`, giving it access to real, clickable URLs.
+
+Remember the `operator.add` reducer on both fields? When three scan nodes run in parallel, their lists get concatenated: `["## Parker\n\n..."] + ["## Bosch\n\n..."] + ["## Eaton\n\n..."]`. The same merging happens for `raw_search_results`.
 
 ---
 
@@ -413,6 +424,8 @@ def recommend(state: GraphState) -> dict:
 def write_briefing(state: GraphState) -> dict:
     # ... build inputs, get prompts ...
 
+    raw_text = "\n\n---\n\n".join(state.get("raw_search_results", []))
+
     llm = _openai("gpt-4o-mini")
     response = llm.invoke([
         {"role": "system", "content": system},
@@ -420,6 +433,9 @@ def write_briefing(state: GraphState) -> dict:
             f"{desc}\n\n"
             f"COMPETITIVE ANALYSIS:\n\n{state['analysis']}\n\n"
             f"STRATEGIC RECOMMENDATIONS:\n\n{state['recommendations']}\n\n"
+            f"RAW SEARCH RESULTS WITH SOURCE URLS:\n"
+            f"Use these for the Latest News section — extract real URLs, do NOT invent URLs.\n\n"
+            f"{raw_text}\n\n"
             f"Expected output format:\n{expected}"
         )},
     ])
@@ -430,9 +446,11 @@ def write_briefing(state: GraphState) -> dict:
     print(f"[write_briefing] Finished briefing (gpt-4o-mini) -> output/briefing.md")
     return {"briefing": briefing}
 ```
-**Lines 189-215:** The final node. It takes both the analysis and recommendations and compiles them into a polished briefing document. Uses `gpt-4o-mini` because this is essentially a formatting task — the hard thinking was done by Claude in the previous nodes. Using a cheaper model here saves cost.
+**Lines 189-220:** The final node. It takes the analysis, recommendations, **and raw search results** and compiles them into a polished briefing document. Uses `gpt-4o-mini` because this is essentially a formatting task — the hard thinking was done by Claude in the previous nodes. Using a cheaper model here saves cost.
 
-**Lines 212-213:** A side effect — the briefing is saved to disk as `output/briefing.md`. `exist_ok=True` on `mkdir` means "don't error if the directory already exists." The `encoding="utf-8"` is important on Windows where the default encoding might not handle all characters.
+The `raw_search_results` section is the key addition. Previously, this node only received `analysis` and `recommendations` — both of which had been through 2-3 LLM summarization hops, losing the original Serper URLs along the way. The prompt demanded `[Read more →](URL)` links, so GPT-4o-mini fabricated plausible-looking URLs that didn't exist. Now it receives the original search results (with real URLs) directly from the scan nodes, and the prompt explicitly says to extract URLs from this data rather than inventing them. The `state.get("raw_search_results", [])` with a default prevents errors if the field is missing (defensive coding).
+
+**Lines 217-218:** A side effect — the briefing is saved to disk as `output/briefing.md`. `exist_ok=True` on `mkdir` means "don't error if the directory already exists." The `encoding="utf-8"` is important on Windows where the default encoding might not handle all characters.
 
 ---
 
@@ -590,7 +608,7 @@ _BRIEFING_NODE_LABELS = {
 
 def run_pipeline_stream(company: str, industry: str, competitors: str):
     graph = build_graph()
-    inputs = { ... }  # all GraphState fields with initial values
+    inputs = { ... }  # all GraphState fields with initial values (including raw_search_results: [])
 
     final_state = {}
     for chunk in graph.stream(inputs, stream_mode="updates"):
@@ -635,12 +653,12 @@ When you call `run_pipeline_stream("Danfoss", "Hydraulics", "Parker, Bosch, Eato
 1. `fan_out` splits "Parker, Bosch, Eaton" into 3 `Send` objects
 2. Three `scan_competitor` nodes run **in parallel**, each searching the web for one competitor and summarizing with GPT-4o
 3. As each scan completes, the stream yields a progress message like `"✓ Scanned Parker Hannifin"`
-4. Their `scan_results` lists are **merged** via `operator.add`
+4. Their `scan_results` and `raw_search_results` lists are **merged** via `operator.add`
 5. `analyze` reads all scan results and produces analysis with Claude Sonnet → yields `"✓ Competitive analysis complete"`
 6. `recommend` reads the analysis and generates recommendations with Claude Sonnet → yields `"✓ Strategic recommendations complete"`
 7. `evaluate` checks both deliverables against rubrics with Claude Sonnet → yields `"✓ Quality check passed"` (or a failure message)
 8. If evaluation fails → the failing node is retried with feedback (up to 2 times), with retry progress yielded, then back to step 7
-9. `write_briefing` combines analysis + recommendations into a final report with GPT-4o-mini → yields `"✓ Final briefing written"`
+9. `write_briefing` combines analysis + recommendations + raw search results (with real URLs) into a final report with GPT-4o-mini → yields `"✓ Final briefing written"`
 10. The briefing is saved to disk and yielded as the final `("result", ...)` message
 
 ---

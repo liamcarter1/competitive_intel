@@ -301,6 +301,10 @@ write_briefing:
        Today's date is {current_date}. This section MUST ONLY contain news
        from the past 30-45 days. If an item's date is from a previous year
        or more than 45 days old, DO NOT include it.
+
+       CRITICAL: Extract URLs ONLY from the RAW SEARCH RESULTS section below.
+       Every [Read more →](URL) link must use an actual URL from the search data.
+       NEVER invent or guess a URL. If no URL is available for a finding, omit the link.
     3. PRODUCT & TECHNOLOGY LANDSCAPE
     4. MARKET & BUSINESS INTELLIGENCE
     5. COMPETITOR DEEP DIVES
@@ -313,20 +317,31 @@ write_briefing:
     Be specific and detailed — include company names, product names, dates, and
     data points rather than vague generalizations.
 ```
-**Lines 99-150:** The briefing task defines an 8-section report structure. This is essentially a **document template** in prose form. The LLM follows this structure almost exactly, producing a professional-looking report every time.
+**Lines 99-155:** The briefing task defines an 8-section report structure. This is essentially a **document template** in prose form. The LLM follows this structure almost exactly, producing a professional-looking report every time.
 
 The **DATE FRESHNESS RULE** in Section 2 is a key addition. Without it, the LLM would happily include 2023/2024 articles in the "Latest News" section if those were in the search results. The rule tells the LLM today's date and instructs it to verify each news item's date before including it — and to honestly say "no recent news found" rather than padding with old articles. This works together with the code-level date filtering in `graph.py` (which discards old results before they reach the LLM) as a second line of defence.
+
+The **URL sourcing instruction** ("Extract URLs ONLY from the RAW SEARCH RESULTS section") is critical. The `write_briefing` node in `graph.py` receives the original Serper search results (with real URLs) via the `raw_search_results` state field, injected into the prompt as a separate section. Without this instruction, GPT-4o-mini would hallucinate plausible-looking URLs — it saw no real URLs in the analysis or recommendations (those had been through 2-3 LLM summarization hops), but the prompt demanded clickable links for every news item. Now it has a pool of real URLs to draw from, and the prompt explicitly tells it never to invent one.
 
 The instruction "Be specific and detailed — include company names, product names, dates, and data points rather than vague generalizations" is repeated from the agent backstory because it's that important. LLMs tend toward vagueness; repetition in prompts reinforces specificity.
 
 ```yaml
   expected_output: >
-    A professional, comprehensive competitive intelligence briefing (2000+ words)
-    in markdown format with all seven sections above. Must be specific, evidence-based,
-    and actionable for Engineering, Sales, and Strategy teams.
-    Formatted as markdown without '```'.
+    A professional, comprehensive competitive intelligence briefing (2500+ words)
+    in markdown format with all eight sections above.
+
+    Section 2 (Latest News & Developments) REQUIREMENTS:
+    - MUST include recent news with specific dates from [NEWS (date)] tagged items
+    - EVERY news item MUST have format: **[Date]** Summary. [Read more →](URL)
+    - URLs MUST come from the RAW SEARCH RESULTS section — NEVER invent a URL
+    - If no real URL is available for a finding, omit the link rather than guessing
+    - NO news item should be included without a clickable source link
+    - Dates must be specific (not "recently" or "last week")
+
+    Must be specific, evidence-based, and actionable for Engineering, Sales,
+    and Strategy teams. Formatted as markdown without '```'.
 ```
-**Lines 143-147:** Sets expectations: 2000+ words (prevents too-short reports), markdown format, and the crucial "without '```'" instruction — without this, the LLM might wrap the entire output in a code block, which would break the markdown rendering in Gradio.
+**Lines 143-155:** Sets expectations: 2500+ words (prevents too-short reports), markdown format, and the crucial "without '```'" instruction — without this, the LLM might wrap the entire output in a code block, which would break the markdown rendering in Gradio. The Section 2 requirements explicitly state that URLs must come from the raw search results — this is the prompt-level enforcement that complements the code-level change in `graph.py` (which injects the raw Serper results into the prompt).
 
 ```yaml
   output_file: output/briefing.md
