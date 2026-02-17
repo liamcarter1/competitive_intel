@@ -96,15 +96,26 @@ This sidesteps the entire tool-calling format problem. It's also more predictabl
 
 The briefing scan uses **two Serper endpoints** to get the best of both worlds:
 
-1. **`/news` endpoint** (9 queries per competitor, filtered to past month): This returns actual news articles sorted by recency — press releases, earnings reports, product announcements, M&A news, executive appointments, regulatory actions, and analyst coverage. Each result comes with a publication date, so the LLM knows how fresh the intelligence is. The `tbs=qdr:m` parameter restricts results to the last 30 days.
+1. **`/news` endpoint** (9 queries per competitor, filtered to past month): This returns actual news articles sorted by recency — press releases, earnings reports, product announcements, M&A news, executive appointments, regulatory actions, and analyst coverage. Each result comes with a publication date, so the LLM knows how fresh the intelligence is. The `tbs=qdr:m` parameter asks Serper to restrict results to the last 30 days — but this isn't always reliable (see Bug 5 below), so we also filter in code.
 
 2. **`/search` endpoint** (5 queries per competitor, no date filter): This picks up broader context that news doesn't cover — strategy pages on company websites, job postings on LinkedIn/Indeed (a leading indicator of strategic direction), patent filings on USPTO, and regulatory/trade exposure.
 
+**Every query includes the industry term.** This is critical for disambiguation — a search for "ATOS product launch" returns the French IT company Atos SE; a search for "ATOS Hydraulics & Mobile Machinery product launch" returns the right one. Without industry context, common or ambiguous company names pollute results with the wrong entity (see Bug 6 below).
+
 Results are tagged `[NEWS (date)]` or `[WEB]` so the LLM can prioritise recent news over older web content. The task prompt explicitly instructs the LLM to flag findings from the past 30 days as `[RECENT]`.
+
+**Three layers of freshness defence** keep stale news out of the briefing:
+1. **API layer**: `tbs="qdr:m"` hint to Serper (unreliable but helps)
+2. **Code layer**: `_is_recent_news()` in `graph.py` parses each result's date string (relative like "3 days ago" or absolute like "Jan 15, 2024") and discards anything older than 45 days before it reaches the LLM
+3. **LLM layer**: The scan prompt tells the LLM today's date and instructs it to only report items as recent if their date is within 45 days. The `write_briefing` task has a DATE FRESHNESS RULE requiring the Latest News section to only contain news from the past 30-45 days.
+
+**Disambiguation also works at two layers:**
+1. **Query layer**: Every search query includes `{industry}` to anchor results to the right sector
+2. **LLM layer**: Both `scan_competitor` and `scan_annual_report` prompts include explicit disambiguation instructions telling the LLM to discard results about unrelated companies with similar names
 
 This matters because using only the regular `/search` endpoint was the app's biggest blind spot. Google's web search returns a mix of evergreen content (company "About" pages, Wikipedia) and actual news — and the evergreen stuff often ranks higher. The `/news` endpoint cuts through that noise and surfaces the breaking developments a strategy manager actually cares about.
 
-**Lesson**: When your use case is "tell me what happened recently," use a news-specific search endpoint if one exists. Generic web search is optimised for relevance, not recency — and for competitive intelligence, recency *is* relevance.
+**Lesson**: When your use case is "tell me what happened recently," use a news-specific search endpoint if one exists. Generic web search is optimised for relevance, not recency — and for competitive intelligence, recency *is* relevance. But don't trust any single layer — the `tbs` parameter, the code-level date filter, and the LLM prompt instructions all reinforce each other. Defence in depth beats relying on one mechanism.
 
 ### Real-Time Progress: Streaming Node Completions to the UI
 
@@ -207,6 +218,26 @@ This is a useful pattern to remember: **when your pipeline uses fan-out parallel
 **The fix**: Changed `claude-3-5-sonnet-latest` to `claude-sonnet-4-20250514` in `app.py`.
 
 **The lesson**: Model aliases like `*-latest` feel convenient but are a trap. They're mutable pointers — the provider can retire or redirect them at any time, and your code breaks with no warning. Pin to a specific model version (like `claude-sonnet-4-20250514`) so you control when you upgrade. And when you're testing a system with multiple LLM integration points, test *every* code path that calls an LLM, not just the main pipeline. The deep dive was a completely separate call to Anthropic that happened to use a different model name — easy to overlook because it wasn't part of the LangGraph rewrite.
+
+### Bug 5: The "Past Month" Filter That Returned 2023 Articles
+
+**What happened**: The briefing's "Latest News & Developments (Past 30 Days)" section contained articles from 2024 and 2023. Users clicked the links expecting recent news and found year-old press releases.
+
+**Why it happened**: The Serper news API accepts a `tbs="qdr:m"` parameter that's supposed to filter to the past month. But Serper passes this through to Google, and Google doesn't always respect it — especially for niche industry searches with limited recent results. When there isn't enough recent news for "ATOS hydraulics," Google fills in with older articles that match the keywords.
+
+**The fix**: Three layers of defence. First, a code-level date filter (`_is_recent_news()`) that parses each result's date string — Serper returns dates as "3 days ago", "Jan 15, 2024", etc. — and discards anything older than 45 days before it reaches the LLM. Second, the scan node's LLM prompt now includes today's date and explicit instructions to check freshness. Third, the `write_briefing` task has a DATE FRESHNESS RULE that tells the report writer to only include genuinely recent news and to state clearly when no recent news exists rather than padding with old articles.
+
+**The lesson**: Never trust a single layer of filtering, especially when it's a third-party API parameter you can't inspect. The `tbs` parameter is a *hint* to Google, not a guarantee. When freshness matters, validate dates in your own code. This is defence in depth — the same principle as input validation on both client and server.
+
+### Bug 6: The Wrong ATOS — Competitor Name Disambiguation
+
+**What happened**: Searching for "ATOS" as a hydraulics competitor returned results about Atos SE, a large French IT services company. The briefing contained analysis of cloud computing strategies and digital transformation initiatives — completely irrelevant to hydraulic machinery.
+
+**Why it happened**: Seven of the nine news search queries didn't include the industry term. Queries like `"ATOS product launch release update 2026"` matched the much more prominent Atos SE (a Fortune 500 IT company) rather than ATOS the Italian hydraulics manufacturer. Google's ranking algorithm favoured the more well-known entity. The annual report queries also had one hardcoded `"hydraulic"` instead of using the `{industry}` variable.
+
+**The fix**: Two layers. First, every search query now includes `{industry}` — so `"ATOS Hydraulics & Mobile Machinery product launch release update 2026"` instead of `"ATOS product launch release update 2026"`. Second, both `scan_competitor` and `scan_annual_report` now include explicit disambiguation instructions in the LLM prompt: "ATOS is a Hydraulics & Mobile Machinery company. DISCARD any results about unrelated companies with a similar name." The task description in `tasks.yaml` also has a new DISAMBIGUATION section.
+
+**The lesson**: Ambiguous entity names are a classic search problem — and it's worse with LLMs because they'll confidently summarise whatever results they get, even if half are about the wrong company. Always qualify entity names with context (industry, location, product category) in search queries. And add a second layer of defence in the LLM prompt, because even well-qualified queries occasionally return wrong results.
 
 ---
 

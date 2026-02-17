@@ -189,10 +189,16 @@ scan_competitor:
     - Patent filings and IP activity signaling future product direction
     - Hiring patterns and open roles that reveal strategic investment areas
     - Conference talks, demos, and technical previews of upcoming capabilities
+
+    DISAMBIGUATION: {competitor} is a {industry} company competing with
+    {company}. If any search results refer to a different company with a
+    similar name in another industry, DISCARD those results entirely.
 ```
 The task description is exhaustively specific. Each bullet point is a **category of intelligence** to look for. This serves as a checklist for the LLM — it systematically addresses each category rather than focusing on whatever it finds first. The `{current_date}` placeholder ensures the agent knows what "recent" means.
 
-The description now tells the LLM that results are tagged `[NEWS]` (from Serper's `/news` endpoint) or `[WEB]` (from the standard `/search` endpoint). This lets the LLM distinguish between recent news articles and evergreen web content, and prioritise accordingly. The instruction also asks the LLM to flag findings from the past 30 days as `[RECENT]` — a useful signal for the downstream analyst node.
+The **DISAMBIGUATION** instruction is critical for companies with common names. For example, "ATOS" could match the French IT company Atos SE instead of the Italian hydraulics manufacturer. This instruction tells the LLM to verify each finding belongs to the right company in the right industry.
+
+The description also tells the LLM that results are tagged `[NEWS]` (from Serper's `/news` endpoint) or `[WEB]` (from the standard `/search` endpoint). This lets the LLM distinguish between recent news articles and evergreen web content, and prioritise accordingly. The instruction also asks the LLM to flag findings from the past 30 days as `[RECENT]` — a useful signal for the downstream analyst node.
 
 ```yaml
   expected_output: >
@@ -290,19 +296,26 @@ write_briefing:
     The briefing must include these sections:
 
     1. EXECUTIVE SUMMARY
-    2. PRODUCT & TECHNOLOGY LANDSCAPE
-    3. MARKET & BUSINESS INTELLIGENCE
-    4. COMPETITOR DEEP DIVES
-    5. THREAT ASSESSMENT
-    6. STRATEGIC RECOMMENDATIONS
-    7. WATCH LIST
+    2. LATEST NEWS & DEVELOPMENTS (PAST 30 DAYS)
+       DATE FRESHNESS RULE — CRITICAL:
+       Today's date is {current_date}. This section MUST ONLY contain news
+       from the past 30-45 days. If an item's date is from a previous year
+       or more than 45 days old, DO NOT include it.
+    3. PRODUCT & TECHNOLOGY LANDSCAPE
+    4. MARKET & BUSINESS INTELLIGENCE
+    5. COMPETITOR DEEP DIVES
+    6. THREAT ASSESSMENT
+    7. STRATEGIC RECOMMENDATIONS
+    8. WATCH LIST
     ...
 
     Format as clean, detailed markdown. Date the report as {current_date}.
     Be specific and detailed — include company names, product names, dates, and
     data points rather than vague generalizations.
 ```
-**Lines 99-142:** The briefing task defines a 7-section report structure. This is essentially a **document template** in prose form. The LLM follows this structure almost exactly, producing a professional-looking report every time.
+**Lines 99-150:** The briefing task defines an 8-section report structure. This is essentially a **document template** in prose form. The LLM follows this structure almost exactly, producing a professional-looking report every time.
+
+The **DATE FRESHNESS RULE** in Section 2 is a key addition. Without it, the LLM would happily include 2023/2024 articles in the "Latest News" section if those were in the search results. The rule tells the LLM today's date and instructs it to verify each news item's date before including it — and to honestly say "no recent news found" rather than padding with old articles. This works together with the code-level date filtering in `graph.py` (which discards old results before they reach the LLM) as a second line of defence.
 
 The instruction "Be specific and detailed — include company names, product names, dates, and data points rather than vague generalizations" is repeated from the agent backstory because it's that important. LLMs tend toward vagueness; repetition in prompts reinforces specificity.
 

@@ -118,7 +118,7 @@ The `/news` response contains a `"news"` key (not `"organic"`), and each result 
 }
 ```
 
-The calling code in `graph.py` accesses `data.get("news", [])` and includes the date in the tagged output: `[NEWS (2 hours ago)] [Title](URL): Snippet`.
+The calling code in `graph.py` accesses `data.get("news", [])`, checks each result's date with `_is_recent_news()` (discarding anything older than 45 days), and includes the date in the tagged output: `[NEWS (2 hours ago)] [Title](URL): Snippet`. This code-level filtering is necessary because the `tbs` parameter is a hint to Google that isn't always respected — stale results from 2023/2024 can slip through.
 
 ---
 

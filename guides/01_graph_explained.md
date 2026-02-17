@@ -15,15 +15,17 @@ from __future__ import annotations
 import json
 import operator
 import os
-from datetime import datetime
+import re
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Annotated, TypedDict
 ```
-**Lines 3-8:** Standard library imports.
+**Lines 3-9:** Standard library imports.
 - `json`: Used for serializing search results.
 - `operator`: This is the key import for LangGraph's **reducer pattern**. Specifically, `operator.add` is used to tell LangGraph how to merge results from parallel nodes (more on this at line 37).
 - `os`: For environment variable access.
-- `datetime`: To stamp reports with the current date.
+- `re`: Regular expressions, used by the news date parser to match patterns like "3 days ago".
+- `datetime, timedelta`: To stamp reports with the current date and to calculate age of news results for freshness filtering.
 - `Path`: Pythonic file path handling (better than string concatenation like `"config/" + "agents.yaml"`).
 - `Annotated, TypedDict`: Typing constructs. `TypedDict` defines the shape of state that flows through the graph. `Annotated` attaches metadata (the reducer function) to a type.
 
@@ -197,8 +199,8 @@ The `inputs` dict is built from state for use in prompt interpolation. This is t
     # ── News searches (Serper /news endpoint, filtered to past month) ────────
     news_queries = [
         f"{competitor} {industry} news announcement {year}",
-        f"{competitor} product launch release update {year}",
-        f"{competitor} acquisition merger partnership deal {year}",
+        f"{competitor} {industry} product launch release update {year}",
+        f"{competitor} {industry} acquisition merger partnership deal {year}",
         # ... 9 queries total covering news, products, M&A, pricing,
         #     customer wins, leadership, earnings, regulatory, analyst ratings
     ]
@@ -206,7 +208,7 @@ The `inputs` dict is built from state for use in prompt interpolation. This is t
     # ── Web searches (Serper /search endpoint, broader context) ──────────────
     web_queries = [
         f"{competitor} {industry} strategy expansion growth plans {year}",
-        f"{competitor} hiring jobs open roles site:linkedin.com OR site:indeed.com {year}",
+        f"{competitor} {industry} hiring jobs open roles site:linkedin.com OR site:indeed.com {year}",
         # ... 5 queries total covering strategy, product roadmaps,
         #     job postings, patents, regulatory/trade exposure
     ]
@@ -217,23 +219,31 @@ The `inputs` dict is built from state for use in prompt interpolation. This is t
 
 2. **Web queries** (5 queries): Call `search_serper()` which hits the standard `/search` endpoint. These pick up broader context that news doesn't cover — job postings on LinkedIn/Indeed (leading indicator of strategy), patent filings on USPTO, regulatory exposure, and company strategy pages.
 
+**Every query includes `{industry}`.** This is essential for disambiguation. A bare search for "ATOS product launch" returns the French IT company Atos SE; adding "Hydraulics & Mobile Machinery" anchors results to the correct entity. Without industry context, ambiguous competitor names pollute results with wrong companies.
+
 **Why two endpoints?** The regular `/search` endpoint returns a mix of evergreen web content (Wikipedia, company "About" pages) and news, with evergreen often ranking higher. For a competitive intelligence tool, recency is everything — the `/news` endpoint cuts through the noise and surfaces breaking developments. The web queries complement this with signals that don't appear as news articles.
 
 **Why hardcode the queries instead of letting the LLM generate them?** Speed and reliability. Having the LLM generate queries would require an extra API call (adding latency and cost), and the LLM might generate vague or unhelpful queries. These templates cover the key intelligence categories comprehensively.
 
 ```python
     # Run news searches (recent news articles, past month)
+    skipped_old = 0
     for q in news_queries:
         try:
             data = search_serper_news(q, num_results=10, tbs="qdr:m")
             for item in data.get("news", [])[:8]:
                 date = item.get("date", "")
+                if not _is_recent_news(date):
+                    skipped_old += 1
+                    continue
                 date_str = f" ({date})" if date else ""
                 all_results.append(
                     f"- [NEWS{date_str}] [{item.get('title', '')}]({item.get('link', '')}): {item.get('snippet', '')}"
                 )
         except Exception as e:
             all_results.append(f"- News search error for '{q}': {e}")
+    if skipped_old:
+        print(f"[scan] {competitor}: filtered out {skipped_old} news results older than {NEWS_MAX_AGE_DAYS} days")
 
     # Run web searches (broader context, top 8 per query)
     for q in web_queries:
@@ -246,12 +256,13 @@ The `inputs` dict is built from state for use in prompt interpolation. This is t
         except Exception as e:
             all_results.append(f"- Search error for '{q}': {e}")
 ```
-**Lines 127-151:** Runs both tiers of searches and collects results.
+**Lines 127-155:** Runs both tiers of searches and collects results.
+- **Date filtering**: Before adding a news result, `_is_recent_news(date)` parses the date string (handles both relative like "3 days ago" and absolute like "Jan 15, 2024") and rejects anything older than 45 days. This is necessary because Serper's `tbs` parameter doesn't always reliably filter old results. Unparseable dates get the benefit of the doubt and pass through. The count of skipped results is logged for diagnostics.
 - News results are tagged `[NEWS (date)]` and web results are tagged `[WEB]` — this lets the LLM know which are recent news vs broader web context, and prioritise accordingly.
 - Top 8 results per query (up from the original 5) — catches more relevant content that may land lower in results.
 - `data.get("news", [])` for news endpoint (different key from the web endpoint's `"organic"`).
 - The `try/except` ensures one failed search doesn't crash the entire scan. The error is recorded as a result so the LLM knows something went wrong.
-- Total potential results: 9 news queries × 8 + 5 web queries × 8 = **up to 112 results** per competitor (vs the original 15).
+- Total potential results: 9 news queries × 8 + 5 web queries × 8 = **up to 112 results** per competitor (vs the original 15), minus any filtered out by the date check.
 
 ```python
     search_context = "\n".join(all_results) if all_results else "No search results found."
@@ -260,8 +271,15 @@ The `inputs` dict is built from state for use in prompt interpolation. This is t
 
 ```python
     llm = _openai("gpt-4o")
+    current_date = state["current_date"]
     user_msg = (
         f"{desc}\n\n"
+        f"DISAMBIGUATION: {competitor} is a {industry} company competing with "
+        f"{company}. DISCARD any search results about unrelated companies that "
+        f"happen to share a similar name but operate in a different industry. ...\n\n"
+        f"DATE FRESHNESS: Today is {current_date}. For items tagged [NEWS], "
+        f"only report them as recent news if the date shown is within the last "
+        f"45 days. ...\n\n"
         f"Here are the web search results for {competitor}:\n\n"
         f"{search_context}\n\n"
         f"Expected output format:\n{expected}"
@@ -271,10 +289,12 @@ The `inputs` dict is built from state for use in prompt interpolation. This is t
         {"role": "user", "content": user_msg},
     ])
 ```
-**Lines 119-129:** The LLM call. This is the standard LangChain pattern:
+**Lines 119-135:** The LLM call. This is the standard LangChain pattern:
 1. Create an LLM client with `_openai("gpt-4o")`.
-2. Build the user message by combining the task description, the raw search results, and the expected output format.
+2. Build the user message by combining the task description, **disambiguation instructions** (telling the LLM which industry the competitor belongs to and to discard results about wrong companies), **date freshness instructions** (telling the LLM today's date and to only report genuinely recent news), the raw search results, and the expected output format.
 3. Call `.invoke()` with a list of message dicts. The list has exactly two messages: a system message (who the agent is) and a user message (what to do). This is the **chat completions** format — system sets the persona, user provides the task.
+
+The disambiguation and date freshness instructions are a second line of defence — the search queries already include industry terms, and old results are already filtered in code, but the LLM instructions catch anything that slips through.
 
 **Why GPT-4o for scanning?** It's good at summarizing search results — a relatively straightforward task. Claude Sonnet is reserved for the harder analytical work later.
 

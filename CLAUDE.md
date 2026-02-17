@@ -34,7 +34,7 @@ User Input ──→ fan_out ─→ scan(competitor_B) ─→ fan_in ──→ a
                                                            └────────────└──────────────────────────┘
 ```
 
-- **Fan-out**: Parallel scan nodes (one per competitor), each running 9 Serper News searches (recent news, past month) + 5 Serper Web searches (broader context) then summarizing with GPT-4o
+- **Fan-out**: Parallel scan nodes (one per competitor), each running 9 Serper News searches (recent news, past month) + 5 Serper Web searches (broader context) then summarizing with GPT-4o. All queries include the industry term for disambiguation. News results are date-filtered (older than 45 days discarded) before reaching the LLM. The LLM prompt includes disambiguation and date freshness instructions.
 - **Fan-in**: Aggregates all scan results into shared state
 - **Sequential**: analyze (Claude Sonnet) → recommend (Claude Sonnet) → evaluate (Claude Sonnet) → write_briefing (GPT-4o-mini)
 - **Quality gate**: The evaluate node checks analysis and recommendations against rubrics. Failures route back to retry the failing node with feedback. Max 2 retries per node.
@@ -47,7 +47,7 @@ User Input ──→ fan_out_annual ─→ scan_annual_report(competitor_B) [+ i
                               └─ scan_annual_report(competitor_C) [+ inline evaluate + retry] ─┘
 ```
 
-- **Fan-out**: Parallel deep-dive report nodes (one per competitor), each running 15 Serper searches then synthesizing with Claude Sonnet
+- **Fan-out**: Parallel deep-dive report nodes (one per competitor), each running 18 Serper searches (all including industry for disambiguation) then synthesizing with Claude Sonnet. The LLM prompt includes a critical disambiguation reminder to discard results about unrelated companies.
 - **Inline evaluation**: Each branch evaluates its own report against a quality rubric and retries up to 2 times with feedback (evaluation happens inside the node, not as a separate graph node, to preserve per-competitor granularity)
 - **Output**: Combined markdown report saved to `output/annual_report_analysis.md`
 
@@ -114,7 +114,8 @@ uv run competitive_intel   # Run the CLI pipeline
 
 ### Network Security
 - All external API calls (OpenAI, Anthropic, Serper) must use HTTPS. Do not downgrade to HTTP.
-- Serper has two endpoints: `/search` (web results) and `/news` (news articles with date filtering via `tbs` parameter). Both are used by the briefing scan.
+- Serper has two endpoints: `/search` (web results) and `/news` (news articles with date filtering via `tbs` parameter). Both are used by the briefing scan. News results are also date-filtered in code (`_is_recent_news()` in `graph.py`) to discard stale results older than 45 days, since the `tbs` parameter is not always reliable.
+- All search queries include the industry term to prevent competitor name ambiguity (e.g., "ATOS" could match a French IT company instead of the hydraulics manufacturer). LLM prompts in both pipelines include explicit disambiguation instructions.
 - Set explicit timeouts on all HTTP requests (as `search_serper()` and `search_serper_news()` do with `timeout=15`).
 - Do not add proxy or redirect-following logic that could leak credentials.
 
