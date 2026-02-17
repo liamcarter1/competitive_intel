@@ -32,7 +32,7 @@ TASKS_CONFIG = _load_yaml("tasks.yaml")
 NEWS_MAX_AGE_DAYS = 45
 
 # Max concurrent Serper search threads per scan node.
-_SEARCH_WORKERS = 10
+_SEARCH_WORKERS = 12
 
 # Cache disambiguation results so the same competitor isn't re-disambiguated
 # if both the briefing and annual-report pipelines run in the same process.
@@ -227,6 +227,13 @@ def scan_competitor(state: ScanState) -> dict:
         f"{sn} {industry} earnings revenue financial results {year} {ex}",
         f"{sn} {industry} regulatory lawsuit patent filing {year} {ex}",
         f"{sn} {industry} stock analyst upgrade downgrade guidance {year} {ex}",
+        # Trade press & fluid power specific
+        f"{sn} \"fluid power\" OR \"hydraulic\" product launch news {year} {ex}",
+        f"{sn} IFPE OR bauma OR ConExpo OR \"Hannover Messe\" {year} {ex}",
+        f"{sn} electrification OR electrohydraulic OR \"electric actuator\" OR \"digital hydraulic\" {year} {ex}",
+        f"{sn} {industry} distributor dealer channel OEM supply {year} {ex}",
+        f"{sn} {industry} press release announcement new {year} {ex}",
+        f"{sn} {industry} factory plant expansion investment manufacturing {year} {ex}",
     ]
 
     # ── Web searches (Serper /search endpoint, broader context) ──────────────
@@ -236,6 +243,11 @@ def scan_competitor(state: ScanState) -> dict:
         f"{sn} {industry} hiring jobs open roles site:linkedin.com OR site:indeed.com {year} {ex}",
         f"{sn} {industry} patent USPTO OR Espacenet {year} {ex}",
         f"{sn} {industry} tariff trade regulatory compliance {year} {ex}",
+        # Trade publications (site-targeted)
+        f"{sn} site:hydraulicspneumatics.com OR site:fluidpowerworld.com OR site:fluidpowerjournal.com",
+        f"{sn} site:mobilehydraulictips.com OR site:powermotiontech.com OR site:oemoffhighway.com",
+        # Press wire services
+        f"{sn} {industry} site:prnewswire.com OR site:businesswire.com OR site:globenewswire.com {year}",
     ]
 
     all_results = []

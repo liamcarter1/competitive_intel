@@ -210,16 +210,27 @@ The `inputs` dict is built from state for use in prompt interpolation. This is t
         f"{sn} {industry} news announcement {year} {ex}",
         f"{sn} {industry} product launch release update {year} {ex}",
         f"{sn} {industry} acquisition merger partnership deal {year} {ex}",
-        # ... 9 queries total covering news, products, M&A, pricing,
+        # ... 9 general queries covering news, products, M&A, pricing,
         #     customer wins, leadership, earnings, regulatory, analyst ratings
+        # Trade press & fluid power specific
+        f"{sn} \"fluid power\" OR \"hydraulic\" product launch news {year} {ex}",
+        f"{sn} IFPE OR bauma OR ConExpo OR \"Hannover Messe\" {year} {ex}",
+        f"{sn} electrification OR electrohydraulic OR \"electric actuator\" ... {year} {ex}",
+        # ... 15 queries total (9 general + 6 trade press/tech/channel/capex)
     ]
 
     # ── Web searches (Serper /search endpoint, broader context) ──────────────
     web_queries = [
         f"{sn} {industry} strategy expansion growth plans {year} {ex}",
         f"{sn} {industry} hiring jobs open roles site:linkedin.com OR site:indeed.com {year} {ex}",
-        # ... 5 queries total covering strategy, product roadmaps,
+        # ... 5 general queries covering strategy, product roadmaps,
         #     job postings, patents, regulatory/trade exposure
+        # Trade publications (site-targeted)
+        f"{sn} site:hydraulicspneumatics.com OR site:fluidpowerworld.com OR ...",
+        f"{sn} site:mobilehydraulictips.com OR site:powermotiontech.com OR ...",
+        # Press wire services
+        f"{sn} {industry} site:prnewswire.com OR site:businesswire.com OR ... {year}",
+        # ... 8 queries total (5 general + 2 trade publications + 1 PR wires)
     ]
 ```
 **Lines 101-130:** The scan uses **LLM-powered disambiguation** followed by a **dual-endpoint strategy**.
@@ -228,11 +239,11 @@ The `inputs` dict is built from state for use in prompt interpolation. This is t
 
 The scan then runs two tiers of search queries designed to catch different types of competitive intelligence:
 
-1. **News queries** (9 queries): Call `search_serper_news()` which hits Serper's `/news` endpoint, filtered to the past month (`tbs="qdr:m"`). These return actual news articles sorted by recency — press releases, earnings reports, product launches, M&A, executive hires, regulatory actions, analyst coverage. Each result includes a publication date.
+1. **News queries** (15 queries): Call `search_serper_news()` which hits Serper's `/news` endpoint, filtered to the past month (`tbs="qdr:m"`). The first 9 are general-purpose (press releases, earnings reports, product launches, M&A, executive hires, regulatory actions, analyst coverage). The remaining 6 target trade-press-specific intelligence: fluid power terminology, trade shows (IFPE, bauma, ConExpo, Hannover Messe), electrification/electrohydraulic technology trends, distributor/channel/OEM moves, press release wires, and factory/capex/manufacturing investments. Each result includes a publication date.
 
-2. **Web queries** (5 queries): Call `search_serper()` which hits the standard `/search` endpoint. These pick up broader context that news doesn't cover — job postings on LinkedIn/Indeed (leading indicator of strategy), patent filings on USPTO, regulatory exposure, and company strategy pages.
+2. **Web queries** (8 queries): Call `search_serper()` which hits the standard `/search` endpoint. The first 5 are general-purpose (job postings on LinkedIn/Indeed, patent filings on USPTO, regulatory exposure, company strategy pages). The remaining 3 are **site-targeted**: two queries hit the major hydraulics trade publications by domain (Hydraulics & Pneumatics, Fluid Power World, Fluid Power Journal, Mobile Hydraulic Tips, Power & Motion, OEM Off-Highway), and one hits PR wire services (PRNewswire, BusinessWire, GlobeNewsWire). Site-targeted queries ensure coverage of specialist publications that Google News may rank below general media.
 
-**Every query uses the disambiguated search name + exclusion terms + `{industry}`.** This is essential for disambiguation. A bare search for "ATOS product launch" returns the French IT company Atos SE; using "ATOS SpA hydraulic valves Hydraulics & Mobile Machinery product launch -"Atos SE" -"Eviden"" anchors results to the correct entity and actively excludes the wrong one.
+**Every query uses the disambiguated search name + exclusion terms + `{industry}`** (except the site-targeted trade press queries, which are already scoped to hydraulics publications by domain). This is essential for disambiguation. A bare search for "ATOS product launch" returns the French IT company Atos SE; using "ATOS SpA hydraulic valves Hydraulics & Mobile Machinery product launch -"Atos SE" -"Eviden"" anchors results to the correct entity and actively excludes the wrong one.
 
 **Why two endpoints?** The regular `/search` endpoint returns a mix of evergreen web content (Wikipedia, company "About" pages) and news, with evergreen often ranking higher. For a competitive intelligence tool, recency is everything — the `/news` endpoint cuts through the noise and surfaces breaking developments. The web queries complement this with signals that don't appear as news articles.
 
@@ -275,7 +286,7 @@ The scan then runs two tiers of search queries designed to catch different types
 - Top 8 results per query (up from the original 5) — catches more relevant content that may land lower in results.
 - `data.get("news", [])` for news endpoint (different key from the web endpoint's `"organic"`).
 - The `try/except` ensures one failed search doesn't crash the entire scan. The error is recorded as a result so the LLM knows something went wrong.
-- Total potential results: 9 news queries × 8 + 5 web queries × 8 = **up to 112 results** per competitor (vs the original 15), minus any filtered out by the date check.
+- Total potential results: 15 news queries × 8 + 8 web queries × 8 = **up to 184 results** per competitor, minus any filtered out by the date check.
 
 ```python
     search_context = "\n".join(all_results) if all_results else "No search results found."

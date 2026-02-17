@@ -34,7 +34,7 @@ User Input ──→ fan_out ─→ scan(competitor_B) ─→ fan_in ──→ a
                                                            └────────────└──────────────────────────┘
 ```
 
-- **Fan-out**: Parallel scan nodes (one per competitor), each starting with an LLM disambiguation call (`_disambiguate_competitor()` via gpt-4o-mini) that generates a search-friendly name, Google exclusion terms, and a context sentence. Then runs 9 Serper News searches (recent news, past month) + 5 Serper Web searches (broader context) using the disambiguated name + exclusion terms, then summarizes with GPT-4o. News results are date-filtered (older than 45 days discarded) before reaching the LLM. The LLM prompt includes the disambiguation context and date freshness instructions. Each scan node also returns the raw Serper results (with real URLs) in `raw_search_results`, which bypasses the LLM summarization and flows directly to `write_briefing`.
+- **Fan-out**: Parallel scan nodes (one per competitor), each starting with an LLM disambiguation call (`_disambiguate_competitor()` via gpt-4o-mini) that generates a search-friendly name, Google exclusion terms, and a context sentence. Then runs 15 Serper News searches (recent news, past month — including trade press, trade shows, electrification/tech trends, distributor/channel, press releases, and capex/manufacturing) + 8 Serper Web searches (broader context — including site-targeted queries for hydraulics trade publications and PR wire services) using the disambiguated name + exclusion terms, then summarizes with GPT-4o. News results are date-filtered (older than 45 days discarded) before reaching the LLM. The LLM prompt includes the disambiguation context and date freshness instructions. Each scan node also returns the raw Serper results (with real URLs) in `raw_search_results`, which bypasses the LLM summarization and flows directly to `write_briefing`.
 - **Fan-in**: Aggregates all scan results and raw search results into shared state
 - **Sequential**: analyze (Claude Sonnet) → recommend (Claude Sonnet) → evaluate (Claude Sonnet) → write_briefing (GPT-4o-mini, receives analysis + recommendations + raw search results with real URLs)
 - **Quality gate**: The evaluate node checks analysis and recommendations against rubrics. Failures route back to retry the failing node with feedback. Max 2 retries per node.
@@ -143,7 +143,7 @@ uv run competitive_intel   # Run the CLI pipeline
 
 ### LLM Model Selection
 - Disambiguation: GPT-4o-mini with low temperature (0.1) — cheap per-competitor call to generate search names and exclusion terms
-- Scan nodes: GPT-4o (reliable for search result summarization; receives ~112 results from 14 searches per competitor)
+- Scan nodes: GPT-4o (reliable for search result summarization; receives ~184 results from 23 searches per competitor)
 - Analyze node: Claude Sonnet (better analytical reasoning)
 - Recommend node: Claude Sonnet (better strategic synthesis)
 - Evaluate node: Claude Sonnet (rubric-based quality judgment)
