@@ -1,3 +1,14 @@
+---
+title: Competitive Intel
+emoji: 📊
+colorFrom: red
+colorTo: gray
+sdk: gradio
+sdk_version: 5.22.0
+app_file: competitive_intel/app.py
+pinned: false
+---
+
 # Competitive Intelligence Monitor
 
 A multi-agent competitive intelligence platform that generates executive-ready briefing reports on your competitors. Powered by [LangGraph](https://langchain-ai.github.io/langgraph/) for pipeline orchestration with mixed LLM providers (OpenAI + Anthropic), and a [Gradio](https://www.gradio.app/) web interface for interactive use.
