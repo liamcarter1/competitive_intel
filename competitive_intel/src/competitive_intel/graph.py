@@ -3,7 +3,8 @@ from __future__ import annotations
 import json
 import operator
 import os
-from datetime import datetime
+import re
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Annotated, TypedDict
 
@@ -25,6 +26,40 @@ def _load_yaml(name: str) -> dict:
 
 AGENTS_CONFIG = _load_yaml("agents.yaml")
 TASKS_CONFIG = _load_yaml("tasks.yaml")
+
+# Maximum age (in days) for news results — anything older is discarded.
+NEWS_MAX_AGE_DAYS = 45
+
+_RELATIVE_RE = re.compile(r"(\d+)\s+(minute|hour|day|week|month|year)s?\s+ago", re.I)
+
+
+def _parse_serper_date(date_str: str) -> datetime | None:
+    """Parse Serper date strings like '3 days ago' or 'Jan 15, 2026'."""
+    if not date_str:
+        return None
+    # Relative: "3 days ago", "2 hours ago", etc.
+    m = _RELATIVE_RE.search(date_str)
+    if m:
+        n, unit = int(m.group(1)), m.group(2).lower()
+        delta = {"minute": timedelta(minutes=n), "hour": timedelta(hours=n),
+                 "day": timedelta(days=n), "week": timedelta(weeks=n),
+                 "month": timedelta(days=n * 30), "year": timedelta(days=n * 365)}
+        return datetime.now() - delta.get(unit, timedelta())
+    # Absolute: "Jan 15, 2026" / "February 3, 2025" / "15 Jan 2026"
+    for fmt in ("%b %d, %Y", "%B %d, %Y", "%d %b %Y", "%d %B %Y", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(date_str.strip(), fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def _is_recent_news(date_str: str, max_age_days: int = NEWS_MAX_AGE_DAYS) -> bool:
+    """Return True if the date is within max_age_days, or if unparseable (benefit of doubt)."""
+    parsed = _parse_serper_date(date_str)
+    if parsed is None:
+        return True  # can't parse → let the LLM decide
+    return (datetime.now() - parsed).days <= max_age_days
 
 
 # ── State ────────────────────────────────────────────────────────────────────
@@ -105,21 +140,21 @@ def scan_competitor(state: ScanState) -> dict:
     # ── News searches (Serper /news endpoint, filtered to past month) ────────
     news_queries = [
         f"{competitor} {industry} news announcement {year}",
-        f"{competitor} product launch release update {year}",
-        f"{competitor} acquisition merger partnership deal {year}",
-        f"{competitor} pricing changes new model tier {year}",
-        f"{competitor} customer win contract award {year}",
-        f"{competitor} executive appointment leadership hire {year}",
-        f"{competitor} earnings revenue financial results {year}",
+        f"{competitor} {industry} product launch release update {year}",
+        f"{competitor} {industry} acquisition merger partnership deal {year}",
+        f"{competitor} {industry} pricing changes new model tier {year}",
+        f"{competitor} {industry} customer win contract award {year}",
+        f"{competitor} {industry} executive appointment leadership hire {year}",
+        f"{competitor} {industry} earnings revenue financial results {year}",
         f"{competitor} {industry} regulatory lawsuit patent filing {year}",
-        f"{competitor} stock analyst upgrade downgrade guidance {year}",
+        f"{competitor} {industry} stock analyst upgrade downgrade guidance {year}",
     ]
 
     # ── Web searches (Serper /search endpoint, broader context) ──────────────
     web_queries = [
         f"{competitor} {industry} strategy expansion growth plans {year}",
         f"{competitor} {industry} new product features roadmap {year}",
-        f"{competitor} hiring jobs open roles site:linkedin.com OR site:indeed.com {year}",
+        f"{competitor} {industry} hiring jobs open roles site:linkedin.com OR site:indeed.com {year}",
         f"{competitor} {industry} patent USPTO OR Espacenet {year}",
         f"{competitor} {industry} tariff trade regulatory compliance {year}",
     ]
@@ -127,17 +162,23 @@ def scan_competitor(state: ScanState) -> dict:
     all_results = []
 
     # Run news searches (recent news articles, past month)
+    skipped_old = 0
     for q in news_queries:
         try:
             data = search_serper_news(q, num_results=10, tbs="qdr:m")
             for item in data.get("news", [])[:8]:
                 date = item.get("date", "")
+                if not _is_recent_news(date):
+                    skipped_old += 1
+                    continue
                 date_str = f" ({date})" if date else ""
                 all_results.append(
                     f"- [NEWS{date_str}] [{item.get('title', '')}]({item.get('link', '')}): {item.get('snippet', '')}"
                 )
         except Exception as e:
             all_results.append(f"- News search error for '{q}': {e}")
+    if skipped_old:
+        print(f"[scan] {competitor}: filtered out {skipped_old} news results older than {NEWS_MAX_AGE_DAYS} days")
 
     # Run web searches (broader context, top 8 per query)
     for q in web_queries:
@@ -154,8 +195,19 @@ def scan_competitor(state: ScanState) -> dict:
 
     # Summarize with LLM
     llm = _openai("gpt-4o")
+    current_date = state["current_date"]
     user_msg = (
         f"{desc}\n\n"
+        f"DISAMBIGUATION: {competitor} is a {industry} company competing with "
+        f"{company}. DISCARD any search results about unrelated companies that "
+        f"happen to share a similar name but operate in a different industry. "
+        f"Only include findings you can confidently attribute to {competitor} "
+        f"in the {industry} sector.\n\n"
+        f"DATE FRESHNESS: Today is {current_date}. For items tagged [NEWS], "
+        f"only report them as recent news if the date shown is within the last "
+        f"45 days. If a news item's date is from a previous year or clearly "
+        f"outdated, do NOT present it as a recent development. Preserve the "
+        f"original date in your output so readers can judge recency.\n\n"
         f"Here are the web search results for {competitor}:\n\n"
         f"{search_context}\n\n"
         f"Expected output format:\n{expected}"
@@ -509,7 +561,7 @@ def scan_annual_report(state: AnnualReportState) -> dict:
         f"{competitor} {industry} acquisition merger partnership {year} OR {prev_year}",
         f"{competitor} {industry} revenue by region geographic expansion {year} OR {prev_year}",
         f"{competitor} {industry} OEM contracts customer wins {year}",
-        f"{competitor} hydraulic patent USPTO OR Espacenet {year} OR {prev_year}",
+        f"{competitor} {industry} patent USPTO OR Espacenet {year} OR {prev_year}",
         f"{competitor} {industry} tariff regulatory compliance risk {year}",
         f"{competitor} {industry} news press release announcement {year}",
         f"{competitor} {industry} product catalog model series specifications datasheet",
@@ -533,6 +585,11 @@ def scan_annual_report(state: AnnualReportState) -> dict:
     llm = _claude()
     user_msg = (
         f"{desc}\n\n"
+        f"CRITICAL DISAMBIGUATION REMINDER: {competitor} is a {industry} company "
+        f"competing with {company}. Many search results below may be about a "
+        f"DIFFERENT company with a similar name in another industry. You MUST "
+        f"discard any result that is not about {competitor} in the {industry} "
+        f"sector. When in doubt, leave it out.\n\n"
         f"Here are the web search results for {competitor}:\n\n"
         f"{search_context}\n\n"
         f"Expected output format:\n{expected}"

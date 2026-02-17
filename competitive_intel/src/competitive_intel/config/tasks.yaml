@@ -12,6 +12,12 @@ scan_competitor:
     - Conference talks, demos, and technical previews of upcoming capabilities
     - Customer wins, case studies, and go-to-market messaging changes
     - Analyst reports, market share data, and industry rankings
+    DISAMBIGUATION: {competitor} is a {industry} company competing with
+    {company}. If any search results refer to a different company with a
+    similar name in another industry, DISCARD those results entirely. Only
+    include findings you can confidently attribute to {competitor} in the
+    {industry} sector.
+
     Gather as much relevant, recent intelligence as possible about {competitor}
     relative to {company}. Be thorough — run at least 2-3 searches with different
     search terms to cover product, business, and technical angles.
@@ -121,6 +127,15 @@ write_briefing:
        - Regulatory filings, lawsuits, and compliance issues
        - Customer wins, contract awards, and market share shifts
        - Stock movements and analyst upgrades/downgrades
+
+       DATE FRESHNESS RULE — CRITICAL:
+       Today's date is {current_date}. This section MUST ONLY contain news
+       from the past 30-45 days. Check the date on every [NEWS] item.
+       If an item's date is from a previous year or more than 45 days old,
+       DO NOT include it in this section. It is better to have fewer items
+       that are genuinely recent than to pad with outdated news. If no recent
+       news exists for a competitor, state that clearly rather than including
+       old articles.
 
        FORMAT REQUIREMENTS FOR THIS SECTION:
        EVERY news item MUST include a clickable source link. Use this format:
