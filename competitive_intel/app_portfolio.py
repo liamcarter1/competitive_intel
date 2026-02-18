@@ -14,7 +14,7 @@ import gradio as gr
 from anthropic import Anthropic
 from openai import OpenAI
 
-from competitive_intel.graph import run_pipeline
+from competitive_intel.graph import run_news_monitor
 
 OUTPUT_DIR = Path(__file__).parent / "output"
 OUTPUT_DIR.mkdir(exist_ok=True)
@@ -68,7 +68,7 @@ def run_briefing(company: str, industry: str, competitors: str) -> str:
         "current_date": datetime.now().strftime("%Y-%m-%d"),
     }
 
-    result = run_pipeline(
+    result = run_news_monitor(
         company=inputs["company"],
         industry=inputs["industry"],
         competitors=inputs["competitors"],

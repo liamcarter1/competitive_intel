@@ -134,20 +134,37 @@ def _disambiguate_competitor(competitor: str, industry: str, company: str) -> di
 
 # ── State ────────────────────────────────────────────────────────────────────
 
-class GraphState(TypedDict):
+class NewsMonitorState(TypedDict):
     company: str
     industry: str
     competitors: str
     current_date: str
-    scan_results: Annotated[list[str], operator.add]
-    raw_search_results: Annotated[list[str], operator.add]
-    analysis: str
-    recommendations: str
-    briefing: str
-    evaluation_result: str
-    evaluation_feedback: str
-    retry_count_analysis: int
-    retry_count_recommendations: int
+    time_window: str                                    # "past_week" | "past_2_weeks" | "past_month"
+    news_results: Annotated[list[str], operator.add]    # raw tagged results per competitor
+    digest: str                                         # final formatted output
+
+
+class NewsScanState(TypedDict):
+    company: str
+    industry: str
+    competitors: str
+    current_date: str
+    time_window: str
+    competitor: str
+    news_results: Annotated[list[str], operator.add]
+    digest: str
+
+
+_TIME_WINDOW_PARAMS = {
+    "past_week":    {"tbs": "qdr:w",  "max_age_days": 7,  "label": "Past week"},
+    "past_2_weeks": {"tbs": "qdr:w2", "max_age_days": 14, "label": "Past 2 weeks"},
+    "past_month":   {"tbs": "qdr:m",  "max_age_days": 30, "label": "Past month"},
+}
+
+
+def _time_window_params(time_window: str) -> dict:
+    """Return tbs, max_age_days, label for a time_window key."""
+    return _TIME_WINDOW_PARAMS.get(time_window, _TIME_WINDOW_PARAMS["past_2_weeks"])
 
 
 # ── LLM clients ─────────────────────────────────────────────────────────────
@@ -179,88 +196,83 @@ def _task_prompt(task_key: str, inputs: dict) -> tuple[str, str]:
 
 # ── Nodes ────────────────────────────────────────────────────────────────────
 
-class ScanState(TypedDict):
-    company: str
-    industry: str
-    competitors: str
-    current_date: str
-    competitor: str
-    scan_results: Annotated[list[str], operator.add]
-    raw_search_results: Annotated[list[str], operator.add]
-    analysis: str
-    recommendations: str
-    briefing: str
-
-
-def scan_competitor(state: ScanState) -> dict:
+def scan_news(state: NewsScanState) -> dict:
+    """Run 42 search queries for a single competitor — no LLM summarization."""
     competitor = state["competitor"]
-    inputs = {
-        "company": state["company"],
-        "industry": state["industry"],
-        "competitors": state["competitors"],
-        "current_date": state["current_date"],
-        "competitor": competitor,
-    }
-
-    system = _agent_system_prompt("trend_scanner", inputs)
-    desc, expected = _task_prompt("scan_competitor", inputs)
-
     year = state["current_date"][:4]
     industry = state["industry"]
     company = state["company"]
 
-    # LLM-powered disambiguation: get a search-friendly name and exclusion terms
-    disambig = _disambiguate_competitor(competitor, industry, company)
-    sn = disambig["search_name"]  # e.g. "ATOS SpA hydraulic valves"
-    ex = disambig["exclude_terms"]  # e.g. -"Atos SE" -"Eviden"
-    ctx = disambig["context"]  # one-sentence identity for LLM prompt
-    print(f"[scan] {competitor} disambiguation: search_name={sn!r}, exclude={ex!r}")
+    tw = _time_window_params(state.get("time_window", "past_2_weeks"))
+    tbs = tw["tbs"]
+    max_age = tw["max_age_days"]
 
-    # ── News searches (Serper /news endpoint, filtered to past month) ────────
+    # LLM-powered disambiguation
+    disambig = _disambiguate_competitor(competitor, industry, company)
+    sn = disambig["search_name"]
+    ex = disambig["exclude_terms"]
+    print(f"[scan_news] {competitor} disambiguation: search_name={sn!r}, exclude={ex!r}")
+
+    # ── News searches (25 queries) ───────────────────────────────────────────
     news_queries = [
         f"{sn} {industry} news announcement {year} {ex}",
         f"{sn} {industry} product launch release update {year} {ex}",
         f"{sn} {industry} acquisition merger partnership deal {year} {ex}",
         f"{sn} {industry} pricing changes new model tier {year} {ex}",
         f"{sn} {industry} customer win contract award {year} {ex}",
-        f"{sn} {industry} executive appointment leadership hire {year} {ex}",
+        f"{sn} {industry} executive appointment leadership hire CEO {year} {ex}",
         f"{sn} {industry} earnings revenue financial results {year} {ex}",
         f"{sn} {industry} regulatory lawsuit patent filing {year} {ex}",
         f"{sn} {industry} stock analyst upgrade downgrade guidance {year} {ex}",
-        # Trade press & fluid power specific
-        f"{sn} \"fluid power\" OR \"hydraulic\" product launch news {year} {ex}",
-        f"{sn} IFPE OR bauma OR ConExpo OR \"Hannover Messe\" {year} {ex}",
-        f"{sn} electrification OR electrohydraulic OR \"electric actuator\" OR \"digital hydraulic\" {year} {ex}",
+        f'{sn} "fluid power" OR "hydraulic" product launch news {year} {ex}',
+        f'{sn} IFPE OR bauma OR ConExpo OR "Hannover Messe" {year} {ex}',
+        f'{sn} electrification OR electrohydraulic OR "electric actuator" OR "digital hydraulic" {year} {ex}',
         f"{sn} {industry} distributor dealer channel OEM supply {year} {ex}",
         f"{sn} {industry} press release announcement new {year} {ex}",
         f"{sn} {industry} factory plant expansion investment manufacturing {year} {ex}",
+        f"{sn} {industry} supply chain disruption shortage logistics {year} {ex}",
+        f"{sn} {industry} sustainability ESG carbon emissions environmental {year} {ex}",
+        f"{sn} {industry} safety recall defect incident OSHA {year} {ex}",
+        f"{sn} {industry} award recognition innovation winner {year} {ex}",
+        f"{sn} {industry} R&D technology innovation research development {year} {ex}",
+        f"{sn} {industry} layoff restructuring cost cutting workforce reduction {year} {ex}",
+        f"{sn} {industry} government contract military defense infrastructure {year} {ex}",
+        f'{sn} "industrial automation" OR "Industry 4.0" OR "smart manufacturing" {year} {ex}',
+        f'{sn} "construction equipment" OR "mobile machinery" OR "off-highway" {year} {ex}',
+        f"{sn} {industry} tariff trade regulation import duty {year} {ex}",
     ]
 
-    # ── Web searches (Serper /search endpoint, broader context) ──────────────
+    # ── Web searches (17 queries) ────────────────────────────────────────────
     web_queries = [
         f"{sn} {industry} strategy expansion growth plans {year} {ex}",
         f"{sn} {industry} new product features roadmap {year} {ex}",
         f"{sn} {industry} hiring jobs open roles site:linkedin.com OR site:indeed.com {year} {ex}",
         f"{sn} {industry} patent USPTO OR Espacenet {year} {ex}",
-        f"{sn} {industry} tariff trade regulatory compliance {year} {ex}",
-        # Trade publications (site-targeted)
         f"{sn} site:hydraulicspneumatics.com OR site:fluidpowerworld.com OR site:fluidpowerjournal.com",
         f"{sn} site:mobilehydraulictips.com OR site:powermotiontech.com OR site:oemoffhighway.com",
-        # Press wire services
+        f"{sn} site:ifpe.com OR site:fluidpowernet.com OR site:dieselprogress.com",
+        f"{sn} site:automationworld.com OR site:controleng.com OR site:plantengineering.com",
+        f"{sn} site:equipmentworld.com OR site:forconstructionpros.com OR site:constructionequipment.com",
         f"{sn} {industry} site:prnewswire.com OR site:businesswire.com OR site:globenewswire.com {year}",
+        f"{sn} site:sec.gov 10-K OR 10-Q OR 8-K {year}",
+        f"{sn} {industry} site:reuters.com OR site:bloomberg.com OR site:ft.com {year}",
+        f"{sn} {industry} site:glassdoor.com OR site:ziprecruiter.com {year}",
+        f"{sn} site:patents.google.com {year}",
+        f"{sn} {industry} site:linkedin.com/posts OR site:linkedin.com/pulse {year}",
+        f"{sn} site:nfpa.com OR site:fpda.org OR site:nahad.org",
+        f"{sn} site:machinedesign.com OR site:designworldonline.com OR site:theengineer.co.uk",
     ]
 
     all_results = []
     skipped_old = 0
 
     def _fetch_news(q):
-        """Fetch a single news query, return (results_list, skipped_count)."""
         results, skipped = [], 0
         try:
-            data = search_serper_news(q, num_results=10, tbs="qdr:m")
+            data = search_serper_news(q, num_results=10, tbs=tbs)
             for item in data.get("news", [])[:8]:
                 date = item.get("date", "")
-                if not _is_recent_news(date):
+                if not _is_recent_news(date, max_age_days=max_age):
                     skipped += 1
                     continue
                 date_str = f" ({date})" if date else ""
@@ -272,7 +284,6 @@ def scan_competitor(state: ScanState) -> dict:
         return results, skipped
 
     def _fetch_web(q):
-        """Fetch a single web query, return results_list."""
         results = []
         try:
             data = search_serper(q)
@@ -284,7 +295,6 @@ def scan_competitor(state: ScanState) -> dict:
             results.append(f"- Search error for '{q}': {e}")
         return results
 
-    # Run all news + web searches concurrently
     with ThreadPoolExecutor(max_workers=_SEARCH_WORKERS) as executor:
         news_futures = {executor.submit(_fetch_news, q): q for q in news_queries}
         web_futures = {executor.submit(_fetch_web, q): q for q in web_queries}
@@ -298,337 +308,109 @@ def scan_competitor(state: ScanState) -> dict:
             all_results.extend(future.result())
 
     if skipped_old:
-        print(f"[scan] {competitor}: filtered out {skipped_old} news results older than {NEWS_MAX_AGE_DAYS} days")
+        print(f"[scan_news] {competitor}: filtered out {skipped_old} results older than {max_age} days")
 
-    search_context = "\n".join(all_results) if all_results else "No search results found."
-
-    # Summarize with LLM
-    llm = _openai("gpt-4o")
-    current_date = state["current_date"]
-    user_msg = (
-        f"{desc}\n\n"
-        f"DISAMBIGUATION: {ctx if ctx else f'{competitor} is a {industry} company competing with {company}'}. "
-        f"DISCARD any search results about unrelated companies that "
-        f"happen to share a similar name but operate in a different industry. "
-        f"Only include findings you can confidently attribute to {competitor} "
-        f"in the {industry} sector.\n\n"
-        f"DATE FRESHNESS: Today is {current_date}. For items tagged [NEWS], "
-        f"only report them as recent news if the date shown is within the last "
-        f"45 days. If a news item's date is from a previous year or clearly "
-        f"outdated, do NOT present it as a recent development. Preserve the "
-        f"original date in your output so readers can judge recency.\n\n"
-        f"Here are the web search results for {competitor}:\n\n"
-        f"{search_context}\n\n"
-        f"Expected output format:\n{expected}"
-    )
-    response = llm.invoke([
-        {"role": "system", "content": system},
-        {"role": "user", "content": user_msg},
-    ])
-    print(f"[scan] Finished scanning {competitor} (gpt-4o) — {len(all_results)} results from {len(news_queries)} news + {len(web_queries)} web queries")
-    raw_block = f"## {competitor} — Raw Search Results\n\n" + "\n".join(all_results)
-    return {
-        "scan_results": [f"## {competitor}\n\n{response.content}"],
-        "raw_search_results": [raw_block],
-    }
+    print(f"[scan_news] Finished {competitor} — {len(all_results)} results from {len(news_queries)} news + {len(web_queries)} web queries")
+    raw_block = f"## {competitor}\n\n" + "\n".join(all_results) if all_results else f"## {competitor}\n\nNo search results found."
+    return {"news_results": [raw_block]}
 
 
-def fan_out(state: GraphState) -> list[Send]:
-    competitors = [c.strip() for c in state["competitors"].split(",") if c.strip()]
-    return [Send("scan_competitor", {**state, "competitor": c}) for c in competitors]
-
-
-def analyze(state: GraphState) -> dict:
+def compile_digest(state: NewsMonitorState) -> dict:
+    """Single GPT-4o-mini call to deduplicate, categorize, and format the digest."""
+    tw = _time_window_params(state.get("time_window", "past_2_weeks"))
     inputs = {
         "company": state["company"],
         "industry": state["industry"],
         "competitors": state["competitors"],
         "current_date": state["current_date"],
+        "time_window_label": tw["label"],
+        "raw_results": "\n\n---\n\n".join(state.get("news_results", [])),
     }
 
-    system = _agent_system_prompt("company_analyst", inputs)
-    desc, expected = _task_prompt("analyze_findings", inputs)
-
-    scan_text = "\n\n---\n\n".join(state["scan_results"])
-
-    user_content = (
-        f"{desc}\n\n"
-        f"RAW COMPETITIVE INTELLIGENCE:\n\n{scan_text}\n\n"
-        f"Expected output format:\n{expected}"
-    )
-
-    feedback = state.get("evaluation_feedback", "")
-    eval_result = state.get("evaluation_result", "")
-    is_retry = eval_result in ("fail_analysis", "fail_both")
-    if is_retry and feedback:
-        user_content += (
-            f"\n\n---\n"
-            f"PREVIOUS ATTEMPT FEEDBACK (address these issues in your revised analysis):\n"
-            f"{feedback}\n"
-            f"Please revise your analysis to address the feedback above."
-        )
-
-    llm = _claude()
-    response = llm.invoke([
-        {"role": "system", "content": system},
-        {"role": "user", "content": user_content},
-    ])
-    retry_count = state.get("retry_count_analysis", 0)
-    if is_retry:
-        retry_count += 1
-    print(f"[analyze] Finished analysis (claude-sonnet-4-20250514) retry_count={retry_count}")
-    return {"analysis": response.content, "retry_count_analysis": retry_count}
-
-
-def recommend(state: GraphState) -> dict:
-    inputs = {
-        "company": state["company"],
-        "industry": state["industry"],
-        "competitors": state["competitors"],
-        "current_date": state["current_date"],
-    }
-
-    system = _agent_system_prompt("strategy_advisor", inputs)
-    desc, expected = _task_prompt("strategic_recommendations", inputs)
-
-    user_content = (
-        f"{desc}\n\n"
-        f"COMPETITIVE ANALYSIS:\n\n{state['analysis']}\n\n"
-        f"Expected output format:\n{expected}"
-    )
-
-    feedback = state.get("evaluation_feedback", "")
-    eval_result = state.get("evaluation_result", "")
-    is_retry = eval_result in ("fail_recommendations", "fail_both")
-    if is_retry and feedback:
-        user_content += (
-            f"\n\n---\n"
-            f"PREVIOUS ATTEMPT FEEDBACK (address these issues in your revised recommendations):\n"
-            f"{feedback}\n"
-            f"Please revise your recommendations to address the feedback above."
-        )
-
-    llm = _claude()
-    response = llm.invoke([
-        {"role": "system", "content": system},
-        {"role": "user", "content": user_content},
-    ])
-    retry_count = state.get("retry_count_recommendations", 0)
-    if is_retry:
-        retry_count += 1
-    print(f"[recommend] Finished recommendations (claude-sonnet-4-20250514) retry_count={retry_count}")
-    return {"recommendations": response.content, "retry_count_recommendations": retry_count}
-
-
-def write_briefing(state: GraphState) -> dict:
-    inputs = {
-        "company": state["company"],
-        "industry": state["industry"],
-        "competitors": state["competitors"],
-        "current_date": state["current_date"],
-    }
-
-    system = _agent_system_prompt("report_writer", inputs)
-    desc, expected = _task_prompt("write_briefing", inputs)
-
-    raw_text = "\n\n---\n\n".join(state.get("raw_search_results", []))
+    system = _agent_system_prompt("news_digest_curator", inputs)
+    desc, expected = _task_prompt("compile_news_digest", inputs)
 
     llm = _openai("gpt-4o-mini")
     response = llm.invoke([
         {"role": "system", "content": system},
-        {"role": "user", "content": (
-            f"{desc}\n\n"
-            f"COMPETITIVE ANALYSIS:\n\n{state['analysis']}\n\n"
-            f"STRATEGIC RECOMMENDATIONS:\n\n{state['recommendations']}\n\n"
-            f"RAW SEARCH RESULTS WITH SOURCE URLS:\n"
-            f"Use these for the Latest News section — extract real URLs, do NOT invent URLs.\n\n"
-            f"{raw_text}\n\n"
-            f"Expected output format:\n{expected}"
-        )},
+        {"role": "user", "content": f"{desc}\n\nExpected output format:\n{expected}"},
     ])
 
-    briefing = response.content
+    digest = response.content
     OUTPUT_DIR.mkdir(exist_ok=True)
-    (OUTPUT_DIR / "briefing.md").write_text(briefing, encoding="utf-8")
-    print(f"[write_briefing] Finished briefing (gpt-4o-mini) -> output/briefing.md")
-    return {"briefing": briefing}
+    (OUTPUT_DIR / "news_digest.md").write_text(digest, encoding="utf-8")
+    print(f"[compile_digest] Finished digest (gpt-4o-mini) -> output/news_digest.md")
+    return {"digest": digest}
 
 
-def evaluate(state: GraphState) -> dict:
-    inputs = {
-        "company": state["company"],
-        "industry": state["industry"],
-        "competitors": state["competitors"],
-        "current_date": state["current_date"],
-        "analysis": state["analysis"],
-        "recommendations": state["recommendations"],
-    }
-
-    system = _agent_system_prompt("quality_evaluator", inputs)
-    desc, expected = _task_prompt("evaluate_quality", inputs)
-
-    llm = _claude()
-    response = llm.invoke([
-        {"role": "system", "content": system},
-        {"role": "user", "content": f"{desc}\n\n{expected}"},
-    ])
-
-    raw = response.content.strip()
-    try:
-        parsed = json.loads(raw)
-        result = parsed.get("evaluation_result", "pass")
-        feedback = parsed.get("evaluation_feedback", "")
-    except (json.JSONDecodeError, AttributeError):
-        print(f"[evaluate] WARNING: Could not parse evaluator JSON, defaulting to pass. Raw: {raw[:200]}")
-        result = "pass"
-        feedback = ""
-
-    if result not in ("pass", "fail_analysis", "fail_recommendations", "fail_both"):
-        print(f"[evaluate] WARNING: Unknown evaluation_result '{result}', defaulting to pass")
-        result = "pass"
-
-    print(f"[evaluate] Result: {result}")
-    return {"evaluation_result": result, "evaluation_feedback": feedback}
-
-
-MAX_RETRIES = 2
-
-
-def route_after_evaluation(state: GraphState) -> str:
-    result = state.get("evaluation_result", "pass")
-    retries_analysis = state.get("retry_count_analysis", 0)
-    retries_recommendations = state.get("retry_count_recommendations", 0)
-
-    if result == "pass":
-        return "write_briefing"
-
-    if result == "fail_analysis" and retries_analysis < MAX_RETRIES:
-        print(f"[evaluate] Routing to retry_analyze (attempt {retries_analysis + 1}/{MAX_RETRIES})")
-        return "retry_analyze"
-
-    if result == "fail_recommendations" and retries_recommendations < MAX_RETRIES:
-        print(f"[evaluate] Routing to retry_recommend (attempt {retries_recommendations + 1}/{MAX_RETRIES})")
-        return "retry_recommend"
-
-    if result == "fail_both":
-        if retries_analysis < MAX_RETRIES:
-            print(f"[evaluate] Both failed — routing to retry_analyze first (attempt {retries_analysis + 1}/{MAX_RETRIES})")
-            return "retry_analyze"
-        if retries_recommendations < MAX_RETRIES:
-            print(f"[evaluate] Analysis retries exhausted — routing to retry_recommend (attempt {retries_recommendations + 1}/{MAX_RETRIES})")
-            return "retry_recommend"
-
-    print(f"[evaluate] WARNING: Max retries exhausted (analysis={retries_analysis}, recommendations={retries_recommendations}). Proceeding to write_briefing.")
-    return "write_briefing"
+def fan_out_news(state: NewsMonitorState) -> list[Send]:
+    competitors = [c.strip() for c in state["competitors"].split(",") if c.strip()]
+    return [Send("scan_news", {**state, "competitor": c}) for c in competitors]
 
 
 # ── Graph construction ───────────────────────────────────────────────────────
 
-def build_graph():
-    graph = StateGraph(GraphState)
+def build_news_graph():
+    graph = StateGraph(NewsMonitorState)
 
-    graph.add_node("scan_competitor", scan_competitor)
-    graph.add_node("analyze", analyze)
-    graph.add_node("recommend", recommend)
-    graph.add_node("evaluate", evaluate)
-    graph.add_node("retry_analyze", analyze)
-    graph.add_node("retry_recommend", recommend)
-    graph.add_node("write_briefing", write_briefing)
+    graph.add_node("scan_news", scan_news)
+    graph.add_node("compile_digest", compile_digest)
 
-    graph.set_conditional_entry_point(fan_out, ["scan_competitor"])
-    graph.add_edge("scan_competitor", "analyze")
-    graph.add_edge("analyze", "recommend")
-    graph.add_edge("recommend", "evaluate")
-    graph.add_conditional_edges("evaluate", route_after_evaluation, {
-        "write_briefing": "write_briefing",
-        "retry_analyze": "retry_analyze",
-        "retry_recommend": "retry_recommend",
-    })
-    graph.add_edge("retry_analyze", "recommend")
-    graph.add_edge("retry_recommend", "evaluate")
-    graph.add_edge("write_briefing", END)
+    graph.set_conditional_entry_point(fan_out_news, ["scan_news"])
+    graph.add_edge("scan_news", "compile_digest")
+    graph.add_edge("compile_digest", END)
 
     return graph.compile()
 
 
-_BRIEFING_NODE_LABELS = {
-    "scan_competitor": "Scanned",
-    "analyze": "Competitive analysis complete",
-    "recommend": "Strategic recommendations complete",
-    "evaluate": "Quality evaluation complete",
-    "retry_analyze": "Re-running analysis (evaluator feedback)",
-    "retry_recommend": "Re-running recommendations (evaluator feedback)",
-    "write_briefing": "Final briefing written",
+_NEWS_MONITOR_NODE_LABELS = {
+    "scan_news": "Scanned",
+    "compile_digest": "News digest compiled",
 }
 
 
-def run_pipeline_stream(company: str, industry: str, competitors: str):
-    """Generator that yields (type, message) tuples as each graph node completes.
-
-    type is "progress" for status updates or "result" for the final briefing text.
-    """
-    graph = build_graph()
+def run_news_monitor_stream(company: str, industry: str, competitors: str,
+                            time_window: str = "past_2_weeks"):
+    """Generator that yields (type, message) tuples as each graph node completes."""
+    graph = build_news_graph()
     inputs = {
         "company": company,
         "industry": industry,
         "competitors": competitors,
         "current_date": datetime.now().strftime("%Y-%m-%d"),
-        "scan_results": [],
-        "raw_search_results": [],
-        "analysis": "",
-        "recommendations": "",
-        "briefing": "",
-        "evaluation_result": "",
-        "evaluation_feedback": "",
-        "retry_count_analysis": 0,
-        "retry_count_recommendations": 0,
+        "time_window": time_window,
+        "news_results": [],
+        "digest": "",
     }
 
     final_state = {}
     for chunk in graph.stream(inputs, stream_mode="updates"):
         for node_name, node_output in chunk.items():
             final_state.update(node_output)
-            label = _BRIEFING_NODE_LABELS.get(node_name, node_name)
+            label = _NEWS_MONITOR_NODE_LABELS.get(node_name, node_name)
 
-            if node_name == "scan_competitor":
-                # Extract competitor name from the scan result (starts with "## CompetitorName")
-                scan_results = node_output.get("scan_results", [])
-                if scan_results:
-                    first_line = scan_results[0].split("\n", 1)[0]
+            if node_name == "scan_news":
+                news_results = node_output.get("news_results", [])
+                if news_results:
+                    first_line = news_results[0].split("\n", 1)[0]
                     comp_name = first_line.lstrip("# ").strip()
                 else:
                     comp_name = "unknown"
-                num_results = scan_results[0].count("- [") if scan_results else 0
                 yield ("progress", f"  ✓ {label} {comp_name}")
 
-            elif node_name == "evaluate":
-                eval_result = node_output.get("evaluation_result", "pass")
-                if eval_result == "pass":
-                    yield ("progress", f"  ✓ Quality check passed")
-                else:
-                    yield ("progress", f"  ⚠ Quality check: {eval_result}")
-
-            elif node_name in ("retry_analyze", "retry_recommend"):
-                yield ("progress", f"  ⟳ {label}")
-
-            elif node_name == "analyze":
-                yield ("progress", f"  ✓ {label}")
-
-            elif node_name == "recommend":
-                yield ("progress", f"  ✓ {label}")
-
-            elif node_name == "write_briefing":
-                yield ("progress", f"  ✓ {label} → output/briefing.md")
+            elif node_name == "compile_digest":
+                yield ("progress", f"  ✓ {label} → output/news_digest.md")
 
             else:
                 yield ("progress", f"  ✓ {label}")
 
-    yield ("result", final_state.get("briefing", ""))
+    yield ("result", final_state.get("digest", ""))
 
 
-def run_pipeline(company: str, industry: str, competitors: str) -> str:
+def run_news_monitor(company: str, industry: str, competitors: str,
+                     time_window: str = "past_2_weeks") -> str:
     result = None
-    for msg_type, msg in run_pipeline_stream(company, industry, competitors):
+    for msg_type, msg in run_news_monitor_stream(company, industry, competitors, time_window):
         if msg_type == "progress":
             try:
                 print(msg)
@@ -637,6 +419,9 @@ def run_pipeline(company: str, industry: str, competitors: str) -> str:
         elif msg_type == "result":
             result = msg
     return result
+
+
+MAX_RETRIES = 2
 
 
 # ── Annual Report Deep Dive Pipeline ─────────────────────────────────────────

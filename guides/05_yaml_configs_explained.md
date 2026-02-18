@@ -2,115 +2,52 @@
 
 The YAML config files are where **all the prompt engineering lives**. They define who each agent is (agents.yaml) and what each agent does (tasks.yaml). This separation means you can tune agent behavior by editing YAML — no Python changes needed.
 
+The configs cover two pipelines: the **news monitor** (news_digest_curator agent + compile_news_digest task) and the **annual report deep-dive** (annual_report_analyst agent + scan_annual_report/evaluate_annual_report tasks). A shared quality_evaluator agent handles evaluation for the annual report pipeline.
+
 ---
 
 ## agents.yaml — Agent Personas
 
 Each agent has three fields: `role`, `goal`, and `backstory`. Together, these form the system prompt that tells the LLM who it is and how to behave.
 
-### trend_scanner
+### news_digest_curator
 
 ```yaml
-trend_scanner:
+news_digest_curator:
   role: >
-    {industry} Competitive Trend Scanner
+    {industry} Competitive News Digest Curator
 ```
-**Lines 1-3:** The `>` in YAML is a **folded block scalar** — it takes the following indented lines and joins them into a single line, replacing newlines with spaces. So this becomes the string `"{industry} Competitive Trend Scanner"`. The `{industry}` placeholder gets replaced at runtime by Python's `.format()` method (e.g., becomes `"Hydraulics & Mobile Machinery Competitive Trend Scanner"`).
+The `>` in YAML is a **folded block scalar** — it takes the following indented lines and joins them into a single line, replacing newlines with spaces. So this becomes the string `"{industry} Competitive News Digest Curator"`. The `{industry}` placeholder gets replaced at runtime by Python's `.format()` method (e.g., becomes `"Hydraulics & Mobile Machinery Competitive News Digest Curator"`).
 
 ```yaml
   goal: >
-    Find the latest competitor news, product launches, product changes, R&D investments,
-    patent filings, engineering blog posts, technical announcements, press releases,
-    and hiring patterns for {company} and its competitors ({competitors}) in the {industry} industry.
+    Deduplicate, categorize, and format raw competitive news search results into a
+    clean, scannable news digest organized by competitor for {company}'s leadership.
 ```
-**Lines 4-7:** The goal is specific and comprehensive. Notice how it lists many types of intelligence (product launches, R&D investments, patent filings, hiring patterns). This isn't just decoration — LLMs respond to specificity. A vague goal like "find competitor news" produces vague results. Listing specific categories primes the model to look for each one.
+The goal is concise and action-oriented: three verbs (deduplicate, categorize, format) that describe exactly what the curator does. Notice this is a **curation** goal, not an analysis goal. The old briefing pipeline had four agents (scanner, analyst, advisor, writer) that each built on the previous one's work with increasingly analytical output. The news digest curator deliberately stops short of analysis — it organizes raw search results without adding interpretation. This is a design choice: curation is cheaper (one LLM call vs four) and more reliable (no hallucinated insights), at the cost of leaving the "so what?" to the human reader.
 
 ```yaml
   backstory: >
-    You are an expert competitive intelligence analyst who monitors industry trends
-    around the clock. You dig deep into product release notes, engineering blogs,
-    R&D spending disclosures, patent databases, and technical conference announcements.
-    You understand that product roadmap signals, R&D investment shifts, and engineering
-    talent moves are the earliest indicators of competitive strategy changes.
-    You always run multiple targeted searches per competitor to get comprehensive coverage.
+    You are a news editor who specializes in competitive intelligence digests. You
+    receive raw search results from multiple queries per competitor and your job is
+    to eliminate duplicates, assign each item to the right category, discard irrelevant
+    or off-topic results, and produce a clean markdown digest that an executive can
+    scan in 5 minutes. You never add information beyond what the search results contain —
+    you are a curator, not an analyst. You preserve original dates, URLs, and source
+    attributions exactly as provided.
 ```
-**Lines 8-14:** The backstory is the most powerful prompt engineering technique here. It establishes **expertise and methodology**. When you tell an LLM "you are an expert who digs deep into product release notes," it actually produces more detailed, thorough analysis. This is called **persona prompting** — the LLM adopts the described persona's knowledge and approach.
+The backstory establishes a **news editor persona** — someone who curates and organizes rather than creates. This is crucial prompt engineering for a curation task. Two key behavioral guardrails are embedded in the backstory:
 
-The last line ("You always run multiple targeted searches") is a behavioral instruction disguised as backstory. It reminds the agent to be thorough.
+1. **"You never add information beyond what the search results contain"**: This is the anti-hallucination instruction. Without it, GPT-4o-mini would happily embellish search result summaries with its own knowledge, making the digest unreliable. By explicitly stating the boundary, we get a faithful pass-through of the raw data.
+
+2. **"You preserve original dates, URLs, and source attributions exactly as provided"**: URLs and dates are the most hallucination-prone data types for LLMs. This instruction tells the model to treat them as sacred — copy them verbatim, don't reconstruct them from memory.
+
+The "5 minutes" detail is a subtle but effective framing device. It tells the LLM the output should be scannable — short summaries, clear structure, no walls of text.
 
 ```yaml
-  llm: openai/gpt-4o
+  llm: openai/gpt-4o-mini
 ```
-**Line 15:** A metadata field indicating which LLM to use. This is **informational only** in the current codebase — the actual model is hardcoded in `graph.py` (`_openai("gpt-4o")`). Including it here documents the intended model for each agent, making it easy to see the full agent spec in one place.
-
-### company_analyst
-
-```yaml
-company_analyst:
-  role: >
-    {industry} Company Analyst
-  goal: >
-    Analyze raw competitive intelligence findings and produce a detailed assessment
-    that serves Engineering, Sales, and Strategy teams at {company}. Identify product
-    capability gaps, R&D investment patterns, go-to-market shifts, and technical
-    differentiation across {competitors}.
-  backstory: >
-    You are a sharp business and technical analyst with deep experience in the {industry}
-    sector. You understand both the business and engineering sides — you can read a
-    product changelog and infer strategic intent, spot R&D spending patterns that signal
-    future product direction, and identify sales positioning shifts from pricing and
-    packaging changes. You categorize findings specifically for Engineering (what to
-    build/improve), Sales (competitive positioning and objection handling), and Strategy
-    (market positioning and investment priorities).
-```
-**Lines 17-33:** The analyst agent. Key prompt engineering techniques:
-- **Multi-audience framing**: The goal explicitly mentions three audiences (Engineering, Sales, Strategy). This forces the LLM to organize its output for different readers.
-- **Concrete examples in backstory**: "read a product changelog and infer strategic intent" gives the LLM a specific example of the kind of thinking it should do. Abstract instructions ("be analytical") are less effective than concrete demonstrations.
-
-### strategy_advisor
-
-```yaml
-strategy_advisor:
-  role: >
-    Strategic Intelligence Advisor
-  goal: >
-    Synthesize competitive analysis into actionable strategic recommendations for
-    {company}'s Engineering, Sales, and Strategy leadership. Recommendations must be
-    specific enough that each team can act on them in their next planning cycle.
-  backstory: >
-    You are a former strategy consultant who now advises companies on competitive
-    positioning in the {industry} sector. You combine market analysis with strategic
-    frameworks to deliver recommendations segmented by function — telling Engineering
-    where to invest R&D, Sales how to reposition against competitors, and Strategy
-    leadership where to place long-term bets. You back every recommendation with
-    specific competitive evidence.
-```
-**Lines 35-49:** The strategy advisor. Notice the **escalating specificity** across agents:
-- Scanner: "find things" (broad collection)
-- Analyst: "categorize and assess" (structured analysis)
-- Advisor: "recommend specific actions" (actionable output)
-
-Each agent builds on the previous one's work, getting more specific and action-oriented.
-
-### report_writer
-
-```yaml
-report_writer:
-  role: >
-    Intelligence Briefing Writer
-  goal: >
-    Produce a comprehensive, executive-ready weekly competitive intelligence briefing
-    for {company} that Engineering VPs, Sales leadership, and C-suite can each find
-    actionable in their domain.
-  backstory: >
-    You are an experienced business writer who specializes in detailed, high-impact
-    intelligence reports. You structure information with clear sections for different
-    audiences — an executive summary for the C-suite, a product and R&D section for
-    Engineering, a competitive positioning section for Sales, and strategic recommendations
-    for leadership. You include specific details, data points, and evidence rather than
-    vague summaries.
-```
-**Lines 51-65:** The writer agent. The backstory emphasizes **structure and specificity**. The instruction "Include specific details, data points, and evidence rather than vague summaries" is fighting against the LLM's natural tendency to generalize. Without this instruction, you'd get vague statements like "competitors are investing heavily in R&D." With it, you get "Parker Hannifin increased R&D spending by 12% in Q3, focusing on electrification."
+A metadata field indicating which LLM to use. This is **informational only** in the current codebase — the actual model is hardcoded in `graph.py`. Including it here documents the intended model for each agent, making it easy to see the full agent spec in one place. GPT-4o-mini is a good fit for this agent because the task is structuring and deduplicating, not deep reasoning — it's fast and cheap for what is essentially an editorial formatting job.
 
 ### quality_evaluator
 
@@ -136,7 +73,7 @@ The evaluator agent. Two important design choices here:
 
 2. **Same model tier as the nodes it judges**: The evaluator uses Claude Sonnet — the same caliber as the analyze and recommend nodes. Using a weaker model to judge a stronger model's output would be unreliable. Using a stronger model would work but costs more. Same-tier evaluation is the pragmatic middle ground.
 
-This agent is reused by both the main pipeline evaluator (`evaluate_quality` task) and the annual report evaluator (`evaluate_annual_report` task). One persona, two rubrics.
+This agent is used by the annual report evaluator (`evaluate_annual_report` task). The persona is generic enough to evaluate different types of deliverables — if future pipelines need quality gates, the same agent can be paired with new task rubrics.
 
 ### annual_report_analyst
 
@@ -166,221 +103,113 @@ The annual report analyst. The backstory handles a practical reality: **not all 
 
 Each task has `description` (what to do), `expected_output` (what the result should look like), and metadata (`agent`, `context`, `output_file`).
 
-### scan_competitor
+### compile_news_digest
 
 ```yaml
-scan_competitor:
+compile_news_digest:
   description: >
-    Analyze the web search results below for recent competitive activity about
-    {competitor} in the {industry} industry as of {current_date}. The results
-    include both recent news articles (marked [NEWS]) and broader web results
-    (marked [WEB]). Prioritise the most recent and impactful findings.
+    You are a competitive news curator for {company} in the {industry} industry.
+    Below are raw search results (tagged [NEWS (date)] or [WEB]) for each
+    competitor: {competitors}.
 
-    Extract intelligence across ALL of these categories:
-    - New product releases, feature updates, version launches, and product roadmap announcements
-    - R&D investments, research papers, patent filings, and technical blog posts
-    - Engineering team growth, key technical hires, and talent acquisitions
-    - Pricing changes, new packaging/tiers, or business model shifts
-    - Partnerships, integrations, ecosystem plays, and channel strategy changes
-    - Acquisitions, mergers, funding rounds, and financial performance indicators
-    - Customer wins, new contracts, case studies, and go-to-market messaging changes
-    - Analyst reports, market share data, stock movements, and analyst ratings
-    - Regulatory actions, lawsuits, compliance issues, and trade/tariff exposure
-    - Patent filings and IP activity signaling future product direction
-    - Hiring patterns and open roles that reveal strategic investment areas
-    - Conference talks, demos, and technical previews of upcoming capabilities
-
-    DISAMBIGUATION: {competitor} is a {industry} company competing with
-    {company}. If any search results refer to a different company with a
-    similar name in another industry, DISCARD those results entirely.
+    Today is {current_date}. Time window: {time_window_label}.
 ```
-The task description is exhaustively specific. Each bullet point is a **category of intelligence** to look for. This serves as a checklist for the LLM — it systematically addresses each category rather than focusing on whatever it finds first. The `{current_date}` placeholder ensures the agent knows what "recent" means.
+The opening establishes context: who we are (a news curator for a specific company), what we're working with (raw tagged search results), and the time frame. The `{time_window_label}` placeholder lets the pipeline pass in a human-readable description of the search window (e.g., "past 30 days"), which the LLM can use when deciding whether results are relevant.
 
-The **DISAMBIGUATION** instruction is critical for companies with common names. For example, "ATOS" could match the French IT company Atos SE instead of the Italian hydraulics manufacturer. This instruction tells the LLM to verify each finding belongs to the right company in the right industry. Note that `graph.py` supplements this YAML-level disambiguation with an **LLM-powered disambiguation step** (`_disambiguate_competitor()`) that runs before the searches — it generates a more specific search name, Google exclusion operators, and a context sentence that replaces the generic disambiguation text in the prompt.
+```yaml
+    Your job:
+    1. DEDUPLICATE: Many queries return the same article. Keep only one entry per
+       unique news story (match on URL or headline). Prefer the version with the
+       most detail.
+    2. DISCARD OFF-TOPIC: Remove results about unrelated companies that share a
+       similar name but operate in a different industry. Use the disambiguation
+       context provided for each competitor.
+    3. CATEGORIZE: Assign each item to exactly one category per competitor:
+       - Product & Technology
+       - Business & Financial
+       - People & Organization
+       - Market & Customers
+       - Regulatory & Compliance
+       - Other
+    4. SORT: Within each category, sort by date (newest first). For [WEB] items
+       without a date, place them after dated items.
+    5. FORMAT: Use this exact format for each item:
+       - **[Date]** | Summary sentence (1-2 sentences max). [Source](URL)
+       For [WEB] items without a date, omit the date:
+       - Summary sentence. [Source](URL)
+    6. If a competitor has no results in a category, write "(none this period)".
+    7. NEVER add information beyond what the search results contain. Do not
+       analyze, editorialize, or speculate. You are a curator, not an analyst.
+```
+This is the heart of the task — a **numbered step-by-step procedure**. Several prompt engineering patterns are at work:
 
-The description also tells the LLM that results are tagged `[NEWS]` (from Serper's `/news` endpoint) or `[WEB]` (from the standard `/search` endpoint). This lets the LLM distinguish between recent news articles and evergreen web content, and prioritise accordingly. The instruction also asks the LLM to flag findings from the past 30 days as `[RECENT]` — a useful signal for the downstream analyst node.
+1. **Explicit deduplication logic**: Raw Serper results from 15+ queries per competitor inevitably overlap. The instruction to "match on URL or headline" gives the LLM a concrete deduplication rule rather than a vague "remove duplicates." The preference for "the version with the most detail" handles the case where the same article appears in multiple queries with different snippet lengths.
+
+2. **Disambiguation by reference**: Instead of repeating the full disambiguation rules, the task says "use the disambiguation context provided for each competitor." This works because `graph.py` injects the LLM-generated context sentence from `_disambiguate_competitor()` directly into the raw results block. The prompt trusts the LLM to cross-reference.
+
+3. **Fixed category taxonomy**: Six categories (Product & Technology, Business & Financial, People & Organization, Market & Customers, Regulatory & Compliance, Other) provide just enough granularity to be useful without overwhelming. The "Other" bucket is a catch-all that prevents the LLM from forcing results into ill-fitting categories. Each item goes to **exactly one** category — no duplication across sections.
+
+4. **Exact formatting template**: The `**[Date]** | Summary. [Source](URL)` format is precise enough that the LLM reproduces it nearly verbatim. Giving an exact template produces far more consistent formatting than describing the desired format in prose.
+
+5. **The curator guardrail**: Repeating "You are a curator, not an analyst" from the backstory reinforces the boundary. Without this, GPT-4o-mini tends to editorialize — adding phrases like "This could signal a strategic shift toward..." when it should simply report what the article says.
+
+```yaml
+    RAW SEARCH RESULTS:
+    {raw_results}
+```
+The `{raw_results}` placeholder is where the actual search data gets injected. At runtime, `graph.py` formats the raw Serper results (with their `[NEWS (date)]` or `[WEB]` tags, URLs, and snippets) into a single text block and inserts it here. This is a **data injection pattern** — the task description is a template, and the variable data fills the placeholder.
 
 ```yaml
   expected_output: >
-    A comprehensive structured list of competitive intelligence findings for
-    {competitor}. Include:
-    - Product & Technology: releases, features, technical capabilities, R&D signals, patent filings
-    - Business & Strategy: pricing, partnerships, M&A, funding, go-to-market changes, financial results
-    - Talent & Organization: key hires, team growth, leadership changes, hiring patterns
-    - Market & Regulatory: analyst ratings, regulatory actions, legal developments, trade exposure
-    - Customer Activity: new customer wins, contracts, case studies, account losses
-    Each finding should include the source URL, date, a recency flag [RECENT] if
-    from the past 30 days, and a 2-3 sentence summary of why it matters.
-    Include at least 8-12 findings where available. Prioritise recent news over
-    older web results.
+    A clean markdown digest with this structure:
+
+    # Latest News Monitor — Competitive Intelligence
+    **Company:** {company} | **Industry:** {industry} | **Date:** {current_date}
+    **Time window:** {time_window_label} | **Competitors:** {competitors}
+
+    ---
+
+    ## [Competitor Name]
+
+    ### Product & Technology
+    - **[Date]** | Summary. [Source](URL)
+
+    ### Business & Financial
+    - **[Date]** | Summary. [Source](URL)
+
+    ### People & Organization
+    - (none this period)
+
+    ### Market & Customers
+    - **[Date]** | Summary. [Source](URL)
+
+    ### Regulatory & Compliance
+    - (none this period)
+
+    ### Other
+    - (none this period)
+
+    ---
+
+    (Repeat for each competitor)
+
+    Rules:
+    - No duplicate stories (same URL or same headline = one entry)
+    - Every item has a clickable [Source](URL) — never invent URLs
+    - Dates from [NEWS] tags must be preserved exactly
+    - No analysis, commentary, or recommendations — just curated news
+    - Formatted as clean markdown without code fences
 ```
-The expected output now has **five categories** (up from three), covering the expanded search scope. The minimum finding target has been raised from 5-8 to **8-12** to match the much richer input data (up to 112 search results per competitor vs the original 15). The recency flag `[RECENT]` and the instruction to prioritise news over web results ensure the briefing stays focused on what's happening *now*.
+The expected output is essentially a **complete structural template**. This is more prescriptive than the old briefing's expected output — because the news digest has a rigid structure (same 6 categories for every competitor), providing the exact layout as a template produces highly consistent output. The LLM fills in the data but follows the skeleton exactly.
+
+The trailing "Rules" section restates the key constraints. This redundancy is intentional: LLMs process long prompts, and critical rules stated only once at the top may lose influence by the time the model generates the end of its output. Restating them at the bottom of the expected output section keeps them fresh in the model's attention window.
+
+The "without code fences" instruction prevents the LLM from wrapping the markdown in triple backticks, which would break rendering in Gradio.
 
 ```yaml
-  agent: trend_scanner
+  agent: news_digest_curator
 ```
-**Line 27:** Metadata linking this task to its agent. In the current code, this mapping is done in `graph.py` by which agent prompt the node function loads. This field documents the intended pairing.
-
-### analyze_findings
-
-```yaml
-analyze_findings:
-  description: >
-    Analyze the raw competitive intelligence gathered about {company}'s competitors
-    ({competitors}) in the {industry} industry. Produce analysis segmented for three
-    audiences:
-
-    FOR ENGINEERING LEADERSHIP:
-    - Product capability gaps: where competitors have shipped features {company} lacks
-    - Technology bets: what technical approaches competitors are investing in
-    ...
-
-    FOR SALES LEADERSHIP:
-    - Competitive positioning shifts: how competitors are changing their messaging
-    - Pricing and packaging changes that affect deal competitiveness
-    ...
-
-    FOR STRATEGY LEADERSHIP:
-    - Market trend patterns across all competitors
-    - Potential threats ranked by likelihood and impact
-    ...
-
-    Categorize all findings by urgency: immediate (act this week), short-term (this quarter),
-    and long-term (6-12 months).
-```
-**Lines 28-56:** The analysis task. Two important prompt patterns here:
-
-1. **Audience segmentation**: By explicitly defining three audiences with specific sub-categories, the LLM produces structured output that's actually useful to different teams. Without this, you'd get a wall of text that nobody can quickly scan.
-
-2. **Urgency classification**: The instruction to categorize by urgency (immediate/short-term/long-term) adds a **decision-making dimension**. It's not enough to know what competitors are doing — leaders need to know what requires action *now* vs what to monitor.
-
-### strategic_recommendations
-
-```yaml
-strategic_recommendations:
-  description: >
-    Based on the competitive analysis for {company} in the {industry} industry,
-    develop strategic recommendations organized by business function:
-
-    ENGINEERING RECOMMENDATIONS:
-    - R&D investment priorities: where to increase/decrease engineering investment
-    ...
-
-    SALES RECOMMENDATIONS:
-    - Competitive battle card updates: key talking points against each competitor
-    ...
-
-    STRATEGY RECOMMENDATIONS:
-    - Market positioning adjustments
-    ...
-
-    Each recommendation must cite specific competitive evidence and include:
-    expected impact (high/medium/low), implementation difficulty, and suggested
-    timeline. Prioritize by impact and feasibility.
-```
-**Lines 64-95:** The recommendations task. The key instruction is "Each recommendation must cite specific competitive evidence and include: expected impact, implementation difficulty, and suggested timeline." This forces the LLM to make each recommendation **actionable and justified** rather than generic advice like "invest in R&D."
-
-```yaml
-  context:
-    - analyze_findings
-```
-**Lines 96-97:** Metadata indicating this task depends on the analysis task's output. In the current code, this dependency is enforced by the graph edges (analyze -> recommend). This field documents the data flow.
-
-### write_briefing
-
-```yaml
-write_briefing:
-  description: >
-    Compile all competitive intelligence, analysis, and strategic recommendations
-    into a comprehensive weekly briefing document for {company} leadership.
-    The briefing must include these sections:
-
-    1. EXECUTIVE SUMMARY
-    2. LATEST NEWS & DEVELOPMENTS (PAST 30 DAYS)
-       DATE FRESHNESS RULE — CRITICAL:
-       Today's date is {current_date}. This section MUST ONLY contain news
-       from the past 30-45 days. ONLY use [NEWS (date)] tagged items — NEVER
-       use [WEB] items in this section (they have no date and may be years old).
-
-       CRITICAL: Extract URLs ONLY from the RAW SEARCH RESULTS section below.
-       Every [Read more →](URL) link must use an actual URL from the search data.
-       NEVER invent or guess a URL. If no URL is available for a finding, omit the link.
-    3. PRODUCT & TECHNOLOGY LANDSCAPE
-    4. MARKET & BUSINESS INTELLIGENCE
-    5. COMPETITOR DEEP DIVES
-    6. THREAT ASSESSMENT
-    7. STRATEGIC RECOMMENDATIONS
-    8. WATCH LIST
-    ...
-
-    Format as clean, detailed markdown. Date the report as {current_date}.
-    Be specific and detailed — include company names, product names, dates, and
-    data points rather than vague generalizations.
-```
-**Lines 99-155:** The briefing task defines an 8-section report structure. This is essentially a **document template** in prose form. The LLM follows this structure almost exactly, producing a professional-looking report every time.
-
-The **DATE FRESHNESS RULE** in Section 2 is a key addition. Without it, the LLM would happily include 2023/2024 articles in the "Latest News" section if those were in the search results. The rule tells the LLM today's date and instructs it to verify each news item's date before including it — and to honestly say "no recent news found" rather than padding with old articles. Critically, it also **bans `[WEB]` tagged items** from this section entirely — web results have no publication date and frequently link to content from years ago (e.g. 2015, 2018). Only `[NEWS (date)]` items are allowed, and only if their date is within 45 days. This works together with the code-level date filtering in `graph.py` (which discards old news results before they reach the LLM) as a second line of defence.
-
-The **URL sourcing instruction** ("Extract URLs ONLY from the RAW SEARCH RESULTS section") is critical. The `write_briefing` node in `graph.py` receives the original Serper search results (with real URLs) via the `raw_search_results` state field, injected into the prompt as a separate section. Without this instruction, GPT-4o-mini would hallucinate plausible-looking URLs — it saw no real URLs in the analysis or recommendations (those had been through 2-3 LLM summarization hops), but the prompt demanded clickable links for every news item. Now it has a pool of real URLs to draw from, and the prompt explicitly tells it never to invent one.
-
-The instruction "Be specific and detailed — include company names, product names, dates, and data points rather than vague generalizations" is repeated from the agent backstory because it's that important. LLMs tend toward vagueness; repetition in prompts reinforces specificity.
-
-```yaml
-  expected_output: >
-    A professional, comprehensive competitive intelligence briefing (2500+ words)
-    in markdown format with all eight sections above.
-
-    Section 2 (Latest News & Developments) REQUIREMENTS:
-    - ONLY use [NEWS (date)] tagged items — NEVER use [WEB] items in this section
-    - Every date must be within 45 days of {current_date} — reject older items
-    - EVERY news item MUST have format: **[Date]** Summary. [Read more →](URL)
-    - URLs MUST come from the RAW SEARCH RESULTS section — NEVER invent a URL
-    - If no real URL is available for a finding, omit the link rather than guessing
-    - NO news item should be included without a clickable source link
-    - Dates must be specific (not "recently" or "last week")
-
-    Must be specific, evidence-based, and actionable for Engineering, Sales,
-    and Strategy teams. Formatted as markdown without '```'.
-```
-**Lines 143-155:** Sets expectations: 2500+ words (prevents too-short reports), markdown format, and the crucial "without '```'" instruction — without this, the LLM might wrap the entire output in a code block, which would break the markdown rendering in Gradio. The Section 2 requirements explicitly state that URLs must come from the raw search results — this is the prompt-level enforcement that complements the code-level change in `graph.py` (which injects the raw Serper results into the prompt).
-
-```yaml
-  output_file: output/briefing.md
-```
-**Line 152:** Metadata indicating where the output is saved. In the current code, this is handled by `graph.py` (line 213). This field documents the intended behavior.
-
-### evaluate_quality
-
-```yaml
-evaluate_quality:
-  description: >
-    You are evaluating two competitive intelligence deliverables produced for
-    {company} in the {industry} industry (competitors: {competitors}).
-
-    === ANALYSIS RUBRIC ===
-    1. Three clearly labeled audience sections: Engineering, Sales, and Strategy
-    2. Urgency ratings (immediate / short-term / long-term) on findings
-    3. Specific evidence from the scan (competitor names, product names, dates)
-    4. A cross-cutting "Key Patterns" section with 3-5 significant trends
-
-    === RECOMMENDATIONS RUBRIC ===
-    1. 12-20 recommendations organized by function
-    2. Each recommendation cites specific competitive evidence
-    3. Each recommendation has impact rating, difficulty rating, and timeline
-    4. A "Top 5 Priorities" summary at the top
-
-    === DELIVERABLES TO EVALUATE ===
-    ANALYSIS: {analysis}
-    RECOMMENDATIONS: {recommendations}
-  expected_output: >
-    A JSON object with "evaluation_result" and "evaluation_feedback" keys.
-```
-
-The evaluator task for the main pipeline. Notice how the rubric criteria **directly mirror** the requirements in `analyze_findings` and `strategic_recommendations`. This is intentional — the evaluator checks whether the upstream nodes produced what their task descriptions asked for. If the analysis task says "include urgency ratings" and the evaluator rubric checks for urgency ratings, the loop is closed.
-
-The `{analysis}` and `{recommendations}` placeholders inject the actual deliverables into the evaluation prompt. The evaluator sees both at once so it can check cross-cutting quality (e.g., do the recommendations reference evidence from the analysis?).
-
-The expected output is JSON with a 4-way verdict: `"pass"`, `"fail_analysis"`, `"fail_recommendations"`, or `"fail_both"`. This granularity lets the retry routing logic fix only what's broken.
+Metadata linking this task to its agent. In the current code, this mapping is done in `graph.py` by which agent prompt the node function loads. This field documents the intended pairing.
 
 ### scan_annual_report
 

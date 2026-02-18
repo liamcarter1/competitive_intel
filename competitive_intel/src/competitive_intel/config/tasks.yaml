@@ -1,289 +1,77 @@
-scan_competitor:
+compile_news_digest:
   description: >
-    Search the web thoroughly for recent competitive activity about {competitor}
-    in the {industry} industry as of {current_date}. Run multiple targeted searches
-    covering different angles. Focus on:
-    - New product releases, feature updates, version launches, and product roadmap announcements
-    - R&D investments, research papers, patent filings, and technical blog posts
-    - Engineering team growth, key technical hires, and talent acquisitions
-    - Pricing changes, new packaging/tiers, or business model shifts
-    - Partnerships, integrations, ecosystem plays, and channel strategy changes
-    - Acquisitions, mergers, funding rounds, and financial performance indicators
-    - Conference talks, demos, and technical previews of upcoming capabilities
-    - Customer wins, case studies, and go-to-market messaging changes
-    - Analyst reports, market share data, and industry rankings
-    DISAMBIGUATION: {competitor} is a {industry} company competing with
-    {company}. If any search results refer to a different company with a
-    similar name in another industry, DISCARD those results entirely. Only
-    include findings you can confidently attribute to {competitor} in the
-    {industry} sector.
+    You are a competitive news curator for {company} in the {industry} industry.
+    Below are raw search results (tagged [NEWS (date)] or [WEB]) for each
+    competitor: {competitors}.
 
-    Gather as much relevant, recent intelligence as possible about {competitor}
-    relative to {company}. Be thorough — run at least 2-3 searches with different
-    search terms to cover product, business, and technical angles.
+    Today is {current_date}. Time window: {time_window_label}.
+
+    Your job:
+    1. DEDUPLICATE: Many queries return the same article. Keep only one entry per
+       unique news story (match on URL or headline). Prefer the version with the
+       most detail.
+    2. DISCARD OFF-TOPIC: Remove results about unrelated companies that share a
+       similar name but operate in a different industry. Use the disambiguation
+       context provided for each competitor.
+    3. CATEGORIZE: Assign each item to exactly one category per competitor:
+       - Product & Technology
+       - Business & Financial
+       - People & Organization
+       - Market & Customers
+       - Regulatory & Compliance
+       - Other
+    4. SORT: Within each category, sort by date (newest first). For [WEB] items
+       without a date, place them after dated items.
+    5. FORMAT: Use this exact format for each item:
+       - **[Date]** | Summary sentence (1-2 sentences max). [Source](URL)
+       For [WEB] items without a date, omit the date:
+       - Summary sentence. [Source](URL)
+    6. If a competitor has no results in a category, write "(none this period)".
+    7. NEVER add information beyond what the search results contain. Do not
+       analyze, editorialize, or speculate. You are a curator, not an analyst.
+
+    RAW SEARCH RESULTS:
+    {raw_results}
   expected_output: >
-    A comprehensive structured list of competitive intelligence findings for
-    {competitor}. Include:
-    - Product & Technology: releases, features, technical capabilities, R&D signals
-    - Business & Strategy: pricing, partnerships, M&A, funding, go-to-market changes
-    - Talent & Organization: key hires, team growth, leadership changes
-    Each finding MUST include the source URL in markdown format [title](URL), date,
-    and a 2-3 sentence summary of why it matters. CRITICAL: Preserve all URLs from
-    search results - every finding needs a clickable link. Include at least 5-8
-    findings where available.
-  agent: trend_scanner
+    A clean markdown digest with this structure:
 
-analyze_findings:
-  description: >
-    Analyze the raw competitive intelligence gathered about {company}'s competitors
-    ({competitors}) in the {industry} industry. Produce analysis segmented for three
-    audiences:
+    # Latest News Monitor — Competitive Intelligence
+    **Company:** {company} | **Industry:** {industry} | **Date:** {current_date}
+    **Time window:** {time_window_label} | **Competitors:** {competitors}
 
-    FOR ENGINEERING LEADERSHIP:
-    - Product capability gaps: where competitors have shipped features {company} lacks
-    - Technology bets: what technical approaches competitors are investing in
-    - R&D spending patterns: signals about where competitors are increasing/decreasing investment
-    - Build vs. buy signals: competitor acquisitions that indicate capability gaps
-    - Open source and ecosystem moves that affect the technical landscape
+    ---
 
-    FOR SALES LEADERSHIP:
-    - Competitive positioning shifts: how competitors are changing their messaging
-    - Pricing and packaging changes that affect deal competitiveness
-    - Customer segment targeting: which markets competitors are pursuing aggressively
-    - Win/loss signals: customer switches, case studies, and reference accounts
-    - Partner and channel moves that could affect pipeline
+    ## [Competitor Name]
 
-    FOR STRATEGY LEADERSHIP:
-    - Market trend patterns across all competitors
-    - Potential threats ranked by likelihood and impact
-    - Emerging opportunities {company} could exploit
-    - Investment areas where multiple competitors are converging (consensus bets)
-    - Contrarian opportunities where competitors are NOT investing
+    ### Product & Technology
+    - **[Date]** | Summary. [Source](URL)
 
-    Categorize all findings by urgency: immediate (act this week), short-term (this quarter),
-    and long-term (6-12 months).
-  expected_output: >
-    A detailed analysis document with three clearly labeled sections (Engineering,
-    Sales, Strategy), each containing categorized findings with urgency ratings and
-    supporting evidence from the scan. Include a cross-cutting "Key Patterns" section
-    highlighting the 3-5 most significant trends observed across all competitors.
+    ### Business & Financial
+    - **[Date]** | Summary. [Source](URL)
 
-    CRITICAL: Include source links [title](URL) for all major competitive moves,
-    product launches, and announcements. Preserve URLs from the scan results so
-    readers can verify claims and read full articles.
-  agent: company_analyst
+    ### People & Organization
+    - (none this period)
 
-strategic_recommendations:
-  description: >
-    Based on the competitive analysis for {company} in the {industry} industry,
-    develop strategic recommendations organized by business function:
+    ### Market & Customers
+    - **[Date]** | Summary. [Source](URL)
 
-    ENGINEERING RECOMMENDATIONS:
-    - R&D investment priorities: where to increase/decrease engineering investment
-    - Product roadmap implications: features to accelerate, pivot, or deprioritize
-    - Technical architecture decisions influenced by competitive moves
-    - Build vs. buy vs. partner decisions based on competitor capabilities
+    ### Regulatory & Compliance
+    - (none this period)
 
-    SALES RECOMMENDATIONS:
-    - Competitive battle card updates: key talking points against each competitor
-    - Pricing/packaging responses to competitor moves
-    - Target segment adjustments based on competitor positioning
-    - Objection handling for new competitor capabilities
+    ### Other
+    - (none this period)
 
-    STRATEGY RECOMMENDATIONS:
-    - Market positioning adjustments
-    - Partnership or acquisition targets to close capability gaps
-    - Long-term investment thesis changes
-    - Defensive moats to strengthen
+    ---
 
-    Each recommendation must cite specific competitive evidence and include:
-    expected impact (high/medium/low), implementation difficulty, and suggested
-    timeline. Prioritize by impact and feasibility.
-  expected_output: >
-    A prioritized set of 12-20 strategic recommendations organized by function
-    (Engineering, Sales, Strategy), each with a clear rationale tied to specific
-    competitive intelligence, expected impact rating, difficulty rating, and
-    suggested timeline. Include a "Top 5 Priorities" summary at the top.
-  agent: strategy_advisor
-  context:
-    - analyze_findings
+    (Repeat for each competitor)
 
-write_briefing:
-  description: >
-    Compile all competitive intelligence, analysis, and strategic recommendations
-    into a comprehensive weekly briefing document for {company} leadership.
-    The briefing must include these sections:
-
-    1. EXECUTIVE SUMMARY
-       - 5-7 bullet points covering the most critical developments
-       - Overall competitive threat level (elevated/stable/reduced) with rationale
-
-    2. LATEST NEWS & DEVELOPMENTS (PAST 30 DAYS)
-       - Breaking news and recent announcements from competitors
-       - Product launches, releases, and updates (with dates)
-       - Executive appointments, hiring signals, and organizational changes
-       - M&A activity, partnerships, and strategic deals
-       - Earnings reports, financial results, and analyst commentary
-       - Regulatory filings, lawsuits, and compliance issues
-       - Customer wins, contract awards, and market share shifts
-       - Stock movements and analyst upgrades/downgrades
-
-       DATE FRESHNESS RULE — CRITICAL:
-       Today's date is {current_date}. This section MUST ONLY contain news
-       from the past 30-45 days.
-
-       ONLY use items tagged [NEWS (date)] for this section. Check the date
-       on every [NEWS] item — if the date is from a previous year or more
-       than 45 days before {current_date}, DO NOT include it.
-
-       NEVER use [WEB] tagged items in this section. [WEB] results have no
-       publication date and often link to old or undated content. They belong
-       in other sections (Product & Technology, Market & Business, etc.) but
-       NOT in Latest News.
-
-       It is better to have fewer items that are genuinely recent than to pad
-       with outdated news. If no recent news exists for a competitor, state
-       that clearly rather than including old articles.
-
-       FORMAT REQUIREMENTS FOR THIS SECTION:
-       EVERY news item MUST include a clickable source link. Use this format:
-
-       **[Date]** Brief news summary (1-2 sentences). [Read more →](URL)
-
-       Example:
-       **Feb 15, 2026** Parker Hannifin announces new hydraulic valve series with
-       20% efficiency gains, targeting mobile machinery market. [Read more →](https://parker.com/news/xyz)
-
-       CRITICAL: Extract URLs ONLY from the RAW SEARCH RESULTS section below.
-       Every [Read more →](URL) link must use an actual URL from the search data.
-       NEVER invent or guess a URL. If no URL is available for a finding, omit the link.
-
-       Include specific dates and source links for EVERY item. This section shows
-       what changed in the past month - executives must be able to click through
-       to full articles.
-
-    3. PRODUCT & TECHNOLOGY LANDSCAPE
-       - Competitor product releases and feature updates (detailed)
-       - R&D investment signals and technology bets
-       - Capability comparison matrix where relevant
-       - Implications for {company}'s engineering roadmap
-
-    4. MARKET & BUSINESS INTELLIGENCE
-       - Pricing and packaging changes
-       - Go-to-market and sales strategy shifts
-       - Partnership and ecosystem developments
-       - Customer movement and win/loss signals
-
-    5. COMPETITOR DEEP DIVES
-       - Per-competitor section with detailed activity summary
-       - Strategic intent assessment for each competitor
-
-    6. THREAT ASSESSMENT
-       - Ranked threats with urgency level and recommended response
-       - Emerging risks to monitor
-
-    7. STRATEGIC RECOMMENDATIONS
-       - For Engineering: R&D priorities and product roadmap actions
-       - For Sales: positioning updates and competitive responses
-       - For Strategy: investment and partnership recommendations
-       - Top 5 immediate action items
-
-    8. WATCH LIST
-       - Items requiring continued monitoring next week
-       - Early signals that could become significant
-
-    Format as clean, detailed markdown. Date the report as {current_date}.
-    Be specific and detailed — include company names, product names, dates, and
-    data points rather than vague generalizations. This report should enable
-    executives to make concrete business decisions.
-  expected_output: >
-    A professional, comprehensive competitive intelligence briefing (2500+ words)
-    in markdown format with all eight sections above.
-
-    Section 2 (Latest News & Developments) REQUIREMENTS:
-    - ONLY use [NEWS (date)] tagged items — NEVER use [WEB] items in this section
-    - Every date must be within 45 days of {current_date} — reject older items
-    - EVERY news item MUST have format: **[Date]** Summary. [Read more →](URL)
-    - URLs MUST come from the RAW SEARCH RESULTS section — NEVER invent a URL
-    - If no real URL is available for a finding, omit the link rather than guessing
-    - NO news item should be included without a clickable source link
-    - Dates must be specific (not "recently" or "last week")
-
-    Other sections should include source links where available for major claims.
-    Must be specific, evidence-based, and actionable for Engineering, Sales, and
-    Strategy teams. Formatted as markdown without '```'.
-  agent: report_writer
-  context:
-    - analyze_findings
-    - strategic_recommendations
-  output_file: output/briefing.md
-
-evaluate_quality:
-  description: >
-    You are evaluating two competitive intelligence deliverables produced for
-    {company} in the {industry} industry (competitors: {competitors}).
-
-    Evaluate each deliverable against its rubric below. Be strict on structure
-    and specificity but fair on content depth — outputs that meet a professional
-    bar should pass even if imperfect.
-
-    === ANALYSIS RUBRIC ===
-    The analysis MUST contain:
-    1. Three clearly labeled audience sections: Engineering, Sales, and Strategy
-    2. Urgency ratings (immediate / short-term / long-term) on findings
-    3. Specific evidence from the scan (competitor names, product names, dates)
-    4. A cross-cutting "Key Patterns" section with 3-5 significant trends
-
-    Fail the analysis if any of these are missing or if the content is mostly
-    generic industry observations without competitor-specific evidence.
-
-    === RECOMMENDATIONS RUBRIC ===
-    The recommendations MUST contain:
-    1. 12-20 recommendations organized by function (Engineering, Sales, Strategy)
-    2. Each recommendation cites specific competitive evidence
-    3. Each recommendation has impact rating, difficulty rating, and timeline
-    4. A "Top 5 Priorities" summary at the top
-
-    Fail the recommendations if there are fewer than 12 recommendations, if
-    the function organization is missing, if ratings/timelines are absent from
-    most recommendations, or if the Top 5 Priorities section is missing.
-
-    === CROSS-CUTTING CHECKS ===
-    - Named competitors, specific products, and dates should appear throughout
-    - Claims should be backed by evidence, not vague assertions
-    - Recommendations should be actionable (a team could act on them next quarter)
-
-    === DELIVERABLES TO EVALUATE ===
-
-    ANALYSIS:
-    {analysis}
-
-    RECOMMENDATIONS:
-    {recommendations}
-
-    Evaluate each deliverable and respond with ONLY a JSON object (no markdown
-    fences, no extra text):
-  expected_output: >
-    A JSON object with exactly two keys:
-
-    "evaluation_result": one of "pass", "fail_analysis", "fail_recommendations",
-    or "fail_both"
-
-    "evaluation_feedback": a string with specific feedback. If passing, briefly
-    note strengths. If failing, list the specific gaps that must be fixed,
-    referencing the rubric criteria above. Be concrete — say "missing Key
-    Patterns section" not "could be improved".
-
-    Example pass: {{"evaluation_result": "pass", "evaluation_feedback": "Both
-    deliverables meet the rubric. Analysis covers all three audiences with
-    urgency ratings and a strong Key Patterns section. Recommendations include
-    16 items with proper ratings and a clear Top 5."}}
-
-    Example fail: {{"evaluation_result": "fail_recommendations",
-    "evaluation_feedback": "Recommendations has only 9 items (minimum 12).
-    Missing Top 5 Priorities section. Engineering recommendations lack
-    difficulty ratings and timelines."}}
-  agent: quality_evaluator
+    Rules:
+    - No duplicate stories (same URL or same headline = one entry)
+    - Every item has a clickable [Source](URL) — never invent URLs
+    - Dates from [NEWS] tags must be preserved exactly
+    - No analysis, commentary, or recommendations — just curated news
+    - Formatted as clean markdown without code fences
+  agent: news_digest_curator
 
 scan_annual_report:
   description: >

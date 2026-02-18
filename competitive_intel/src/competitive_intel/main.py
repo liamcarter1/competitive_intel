@@ -6,16 +6,17 @@ load_dotenv()
 os.environ.pop("LANGSMITH_TRACING", None)
 os.environ.pop("LANGCHAIN_TRACING_V2", None)
 
-from competitive_intel.graph import run_pipeline
+from competitive_intel.graph import run_news_monitor
 
 
 def run():
-    """Run the competitive intelligence pipeline."""
+    """Run the news monitor pipeline."""
     try:
-        result = run_pipeline(
+        result = run_news_monitor(
             company="OpenAI",
             industry="Artificial Intelligence",
             competitors="Anthropic, Google DeepMind, Meta AI, Mistral",
+            time_window="past_2_weeks",
         )
         print(result)
     except Exception as e:

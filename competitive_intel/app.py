@@ -26,7 +26,7 @@ from fpdf import FPDF
 from openai import OpenAI
 
 from competitive_intel.graph import (
-    run_pipeline, run_pipeline_stream,
+    run_news_monitor_stream,
     run_annual_report_pipeline, run_annual_report_pipeline_stream,
 )
 
@@ -157,21 +157,21 @@ def _markdown_to_pdf(md_text: str, output_path: Path) -> Path:
     return output_path
 
 QUICK_CHAT_SYSTEM = """You are a competitive intelligence analyst assistant. You answer questions
-about a competitive intelligence briefing report that was generated for the user.
+about a competitive news digest that was generated for the user.
 
 RULES — follow these strictly:
-1. ONLY use information that appears in the briefing report below. Do not add outside knowledge.
-2. If the report does not contain enough information to answer the question, say exactly:
-   "The briefing does not cover this in detail. Use the 'Research This' button for a deep dive with live web search."
-3. Quote or reference specific sections of the report when answering.
+1. ONLY use information that appears in the news digest below. Do not add outside knowledge.
+2. If the digest does not contain enough information to answer the question, say exactly:
+   "The digest does not cover this in detail. Use the 'Research This' button for a deep dive with live web search."
+3. Quote or reference specific sections of the digest when answering.
 4. Be concise and direct. Use bullet points for clarity.
-5. Never speculate or infer beyond what the report states.
+5. Never speculate or infer beyond what the digest states.
 
-BRIEFING REPORT:
+NEWS DIGEST:
 {briefing}"""
 
 DEEP_DIVE_SYSTEM = """You are a competitive intelligence research analyst conducting a deep dive
-investigation. You have been given a user's question, the original briefing report for context,
+investigation. You have been given a user's question, the original news digest for context,
 and fresh web search results.
 
 COMPANY CONTEXT: You are researching competitors of {company} in the {industry} industry.
@@ -187,31 +187,33 @@ RULES — follow these strictly:
 8. DISAMBIGUATION: Only include information about companies that operate in the {industry} sector.
    Discard any search results about unrelated companies that happen to share a similar name.
 
-ORIGINAL BRIEFING (for context only — prioritize fresh search results):
+ORIGINAL NEWS DIGEST (for context only — prioritize fresh search results):
 {briefing}
 
 WEB SEARCH RESULTS:
 {search_results}"""
 
 
-def run_briefing_stream(company: str, industry: str, competitors: str):
-    """Kick off the competitive intelligence pipeline and yield progress updates."""
+def run_news_monitor_ui_stream(company: str, industry: str, competitors: str,
+                               time_window: str):
+    """Kick off the news monitor pipeline and yield progress updates."""
     if not company or not industry or not competitors:
         yield ("error", "Please fill in all fields.")
         return
 
-    yield from run_pipeline_stream(
+    yield from run_news_monitor_stream(
         company=company.strip(),
         industry=industry.strip(),
         competitors=competitors.strip(),
+        time_window=time_window,
     )
 
 
 def list_reports() -> str:
-    """Return contents of the most recent briefing."""
-    briefing = OUTPUT_DIR / "briefing.md"
-    if briefing.exists():
-        return briefing.read_text(encoding="utf-8")
+    """Return contents of the most recent news digest."""
+    digest = OUTPUT_DIR / "news_digest.md"
+    if digest.exists():
+        return digest.read_text(encoding="utf-8")
     return "No reports generated yet."
 
 
@@ -241,14 +243,15 @@ def quick_chat(message: str, history: list, briefing_text: str, request: gr.Requ
 
 
 def _search_web(queries: list[str]) -> str:
-    """Run multiple search queries via Serper and return combined results."""
+    """Run multiple search queries via Serper concurrently and return combined results."""
     import requests
     import os
+    from concurrent.futures import ThreadPoolExecutor, as_completed
 
     api_key = os.environ.get("SERPER_API_KEY", "")
-    all_results = []
 
-    for query in queries:
+    def _fetch(query):
+        results = []
         try:
             resp = requests.post(
                 "https://google.serper.dev/search",
@@ -258,14 +261,21 @@ def _search_web(queries: list[str]) -> str:
             )
             data = resp.json()
             for item in data.get("organic", []):
-                all_results.append({
+                results.append({
                     "title": item.get("title", ""),
                     "link": item.get("link", ""),
                     "snippet": item.get("snippet", ""),
                     "query": query,
                 })
         except Exception as e:
-            all_results.append({"error": str(e), "query": query})
+            results.append({"error": str(e), "query": query})
+        return results
+
+    all_results = []
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        futures = {executor.submit(_fetch, q): q for q in queries}
+        for future in as_completed(futures):
+            all_results.extend(future.result())
 
     return json.dumps(all_results, indent=2)
 
@@ -368,15 +378,54 @@ with gr.Blocks(title="Danfoss Power Solutions — Competitive Intelligence Monit
         container=False,
     )
     gr.Markdown("# Danfoss Power Solutions — Competitive Intelligence Monitor")
-    gr.Markdown("Enter a company, its industry, and key competitors to generate a strategic intelligence briefing.")
+    gr.Markdown("Enter your company and industry, select competitors, then run either pipeline below.")
 
     with gr.Row():
         company = gr.Textbox(label="Company Name", placeholder="e.g. Danfoss Power Solutions")
         industry = gr.Textbox(label="Industry", placeholder="e.g. Hydraulics & Mobile Machinery")
 
-    competitors = gr.Textbox(
-        label="Competitors (comma-separated)",
-        placeholder="e.g. Parker Hannifin, Bosch Rexroth, ATOS",
+    _PREDEFINED_COMPETITORS = [
+        "Bosch Rexroth",
+        "Parker Hannifin",
+        "ATOS spa",
+        "Yuken",
+        "SUN Hydraulics",
+        "MOOG",
+        "Kawasaki Heavy Industries, Ltd",
+        "Bucher Hydraulics",
+        "HAWE Hydraulik",
+        "KYB Corporation",
+    ]
+
+    with gr.Row():
+        competitor_checks = gr.CheckboxGroup(
+            choices=_PREDEFINED_COMPETITORS,
+            label="Select competitors",
+            value=[],
+        )
+    competitor_adhoc = gr.Textbox(
+        label="Additional competitors (comma-separated)",
+        placeholder="e.g. Hydac, Enerpac",
+    )
+
+    # Hidden textbox that holds the merged comma-separated competitors string
+    competitors = gr.Textbox(visible=False)
+
+    def _merge_competitors(checked: list[str], adhoc: str) -> str:
+        parts = list(checked)
+        if adhoc and adhoc.strip():
+            parts.extend([c.strip() for c in adhoc.split(",") if c.strip()])
+        return ", ".join(parts)
+
+    competitor_checks.change(
+        fn=_merge_competitors,
+        inputs=[competitor_checks, competitor_adhoc],
+        outputs=[competitors],
+    )
+    competitor_adhoc.change(
+        fn=_merge_competitors,
+        inputs=[competitor_checks, competitor_adhoc],
+        outputs=[competitors],
     )
 
     gr.Markdown("---")
@@ -389,11 +438,16 @@ with gr.Blocks(title="Danfoss Power Solutions — Competitive Intelligence Monit
     with gr.Row(equal_height=True):
         with gr.Column():
             gr.Markdown(
-                "#### Competitive Briefing\n"
-                "Scans recent news, product launches, pricing changes, and market moves. "
-                "Produces an executive-ready weekly intelligence briefing with strategic recommendations."
+                "#### Latest News Monitor\n"
+                "Scans 42 sources per competitor across news and web, then produces a clean "
+                "news digest organized by competitor and category. Fast and cheap enough for weekly use."
             )
-            generate_btn = gr.Button("Generate Briefing", variant="primary", size="lg")
+            time_window = gr.Radio(
+                choices=["Past week", "Past 2 weeks", "Past month"],
+                value="Past 2 weeks",
+                label="Time window",
+            )
+            generate_btn = gr.Button("Run News Monitor", variant="primary", size="lg")
             status = gr.Markdown("*Ready to generate.*")
             progress_log = gr.Markdown("", elem_id="briefing-progress")
 
@@ -408,16 +462,23 @@ with gr.Blocks(title="Danfoss Power Solutions — Competitive Intelligence Monit
             annual_status = gr.Markdown("*Ready to run.*")
             annual_progress_log = gr.Markdown("", elem_id="annual-progress")
 
-    # --- Briefing Output ---
+    # --- News Digest Output ---
     gr.Markdown("---")
-    gr.Markdown("### Competitive Briefing Output")
-    output = gr.Markdown(label="Briefing Output")
-    briefing_pdf_btn = gr.Button("Download Briefing as PDF", variant="secondary", visible=False)
-    briefing_pdf_file = gr.File(label="Briefing PDF", visible=False)
+    gr.Markdown("### Latest News Digest Output")
+    output = gr.Markdown(label="News Digest Output")
+    briefing_pdf_btn = gr.Button("Download Digest as PDF", variant="secondary", visible=False)
+    briefing_pdf_file = gr.File(label="News Digest PDF", visible=False)
 
-    def on_generate(company, industry, competitors):
+    _TIME_WINDOW_MAP = {
+        "Past week": "past_week",
+        "Past 2 weeks": "past_2_weeks",
+        "Past month": "past_month",
+    }
+
+    def on_generate(company, industry, competitors, time_window_label):
+        tw = _TIME_WINDOW_MAP.get(time_window_label, "past_2_weeks")
         yield {
-            status: "*⟳ Starting briefing pipeline...*",
+            status: "*⟳ Starting news monitor...*",
             output: "", briefing_state: "",
             progress_log: "",
             briefing_pdf_btn: gr.update(visible=False),
@@ -425,7 +486,7 @@ with gr.Blocks(title="Danfoss Power Solutions — Competitive Intelligence Monit
         }
         try:
             log_lines = []
-            for msg_type, msg in run_briefing_stream(company, industry, competitors):
+            for msg_type, msg in run_news_monitor_ui_stream(company, industry, competitors, tw):
                 if msg_type == "error":
                     yield {
                         status: f"*{msg}*",
@@ -443,7 +504,7 @@ with gr.Blocks(title="Danfoss Power Solutions — Competitive Intelligence Monit
                     }
                 elif msg_type == "result":
                     yield {
-                        status: "*Briefing complete!*",
+                        status: "*News digest complete!*",
                         output: msg, briefing_state: msg,
                         progress_log: "\n\n".join(log_lines),
                         briefing_pdf_btn: gr.update(visible=True),
@@ -464,14 +525,14 @@ with gr.Blocks(title="Danfoss Power Solutions — Competitive Intelligence Monit
 
     generate_btn.click(
         fn=on_generate,
-        inputs=[company, industry, competitors],
+        inputs=[company, industry, competitors, time_window],
         outputs=[status, output, briefing_state, progress_log, briefing_pdf_btn, briefing_pdf_file],
     )
 
     def on_briefing_pdf(briefing_text):
         if not briefing_text:
             return gr.update(visible=False, value=None)
-        path = _markdown_to_pdf(briefing_text, OUTPUT_DIR / "briefing.pdf")
+        path = _markdown_to_pdf(briefing_text, OUTPUT_DIR / "news_digest.pdf")
         return gr.update(visible=True, value=str(path))
 
     briefing_pdf_btn.click(
@@ -562,7 +623,7 @@ with gr.Blocks(title="Danfoss Power Solutions — Competitive Intelligence Monit
     # --- Previous Reports ---
     gr.Markdown("---")
     gr.Markdown("## Previous Reports")
-    report_btn = gr.Button("Load Latest Briefing")
+    report_btn = gr.Button("Load Latest News Digest")
     report_output = gr.Markdown()
 
     def on_load_report():
@@ -573,9 +634,9 @@ with gr.Blocks(title="Danfoss Power Solutions — Competitive Intelligence Monit
 
     # --- Chat & Deep Dive Section ---
     gr.Markdown("---")
-    gr.Markdown("## Ask About the Briefing")
+    gr.Markdown("## Ask About the Digest")
     gr.Markdown(
-        "**Quick Chat** answers from the report only. "
+        "**Quick Chat** answers from the digest only. "
         "**Research This** runs a live web search for a thorough, source-cited deep dive."
     )
     gr.Markdown(
@@ -584,7 +645,7 @@ with gr.Blocks(title="Danfoss Power Solutions — Competitive Intelligence Monit
         elem_classes="rate-limit-info"
     )
 
-    chatbot = gr.Chatbot(label="Briefing Q&A", height=400, type="messages")
+    chatbot = gr.Chatbot(label="Digest Q&A", height=400, type="messages")
     chat_input = gr.Textbox(
         label="Your question",
         placeholder="e.g. What are the key product changes from Parker this quarter?",

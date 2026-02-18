@@ -4,35 +4,31 @@
 
 Imagine you're a strategy VP at a tech company. Every week, you need to know what your competitors are up to — who shipped what, who hired whom, who's pivoting their pricing. Normally, this means a junior analyst spending days reading press releases, trawling LinkedIn, and assembling a slide deck that's already stale by Friday.
 
-This project automates that entire workflow. You type in a company name, an industry, and a list of competitors. A pipeline of AI agents fans out across the web, researches each competitor in parallel, then passes everything through an analyst, a strategist, and a report writer — each one a different LLM chosen for the job it's best at. Out the other end comes a structured executive briefing with threat assessments, actionable recommendations, and source citations.
+This project automates the *news gathering* part of that workflow. You pick competitors from a predefined list (or type in ad-hoc ones), choose a time window (past week, 2 weeks, or month), and hit go. A pipeline fans out across the web, blasting 42 search queries per competitor in parallel — 25 news searches and 17 web searches — collecting every relevant result with real titles, URLs, dates, and snippets. No LLM touches the raw search results. Then a single GPT-4o-mini call deduplicates, categorizes, and formats everything into a clean news digest with source links. The whole thing runs in about 60-90 seconds and costs roughly $0.10.
 
-There's also a chat interface bolted on top: you can ask questions about the briefing (grounded strictly in what it says) or hit "Research This" to trigger a live web search with a fully cited deep-dive answer.
+There's also a chat interface bolted on top: you can ask questions about the digest (grounded strictly in what it says) or hit "Research This" to trigger a live web search with a fully cited deep-dive answer.
 
 ---
 
 ## The Architecture — And Why It Looks Like This
 
-### The Pipeline: Think Assembly Line, Not Committee
+### The Pipeline: Think News Wire, Not Committee
 
-The core of the system is a **graph-based pipeline** built with LangGraph. Picture a car factory:
+The core of the system is a **graph-based pipeline** built with LangGraph. The news monitor pipeline is intentionally simple — two stages, no loops:
 
 ```
-                    ┌─ scan(Anthropic) ────┐
-User Input ──→ fan_out ─→ scan(DeepMind) ────→ fan_in ──→ analyze ──→ recommend ──→ evaluate ─── pass ──→ write_briefing
-                    └─ scan(Mistral) ─────┘                ↑            ↑              │
-                                                           │            │              ├─ fail_analysis ──→ retry_analyze ─┐
-                                                           │            │              └─ fail_recs ──→ retry_recommend ──→│
-                                                           │            └──────────────────────────────────────────────────┘
-                                                           └───────────────────────────────────────────────────────────────┘
+                         ┌─ scan_news(Competitor A) ─┐
+User Input ──→ fan_out_news ─→ scan_news(Competitor B) ─→ fan_in ──→ compile_digest ──→ done
+                         └─ scan_news(Competitor C) ─┘
 ```
 
-1. **Fan-out**: The system splits into parallel tracks — one per competitor. Each track searches the web (via Serper API) and summarizes what it finds. If you have 4 competitors, 4 scans run simultaneously. This is like sending 4 scouts out in different directions instead of one scout visiting 4 locations sequentially.
+1. **Fan-out**: The system splits into parallel tracks — one per competitor. Each track fires off 42 search queries (25 news + 17 web) via the Serper API and collects every result as a raw tagged line item — title, URL, date, snippet. **No LLM is involved.** If you have 4 competitors, 4 scans run simultaneously. This is like sending 4 scouts out in different directions, each one just taking photographs instead of writing a report.
 
-2. **Fan-in**: All the scout reports land back in one place — a shared `GraphState` dictionary.
+2. **Fan-in**: All the raw results land back in one place — a shared `NewsMonitorState` dictionary.
 
-3. **Sequential chain**: The combined intelligence flows through analysis, recommendations, and then an **evaluator** before reaching the final report. Each one builds on the previous output.
+3. **Compile digest**: A single GPT-4o-mini call reads *all* the raw results, deduplicates them, categorizes them by topic, and formats them into a clean markdown digest with real source links. This is the only LLM call in the entire pipeline (aside from the cheap disambiguation calls).
 
-4. **Quality gate**: The evaluator checks the analysis and recommendations against the rubrics defined in `tasks.yaml`. If either deliverable falls short, the pipeline loops back to re-run only the failing node(s) with specific feedback injected into the prompt. A max retry limit (2 per node) prevents infinite loops.
+That's it. No analysis node, no recommendations node, no evaluator, no retry loop. The old briefing pipeline had five sequential stages with a quality gate that could loop — this one has two stages and always runs forward. The result: ~60-90 seconds instead of 3-5 minutes, ~$0.10 instead of ~$1.00+.
 
 The key design principle: **each node is an island**. It gets a fresh LLM conversation with its own system prompt and user message. No message history leaks between nodes. This is the whole reason we moved to LangGraph (more on that below).
 
@@ -53,7 +49,7 @@ competitive_intel/
 
 The separation between `agents.yaml`/`tasks.yaml` and `graph.py` is deliberate. The YAML files are like job descriptions — you can tweak an agent's personality or task instructions without touching any Python code. The graph.py file is the wiring — it loads those descriptions, plugs them into LLM calls, and connects the nodes together.
 
-`app.py` is the frontend. It doesn't know or care about LangGraph internals — it calls `run_pipeline_stream(company, industry, competitors)` and iterates over a generator that yields progress messages as each node completes, then the final briefing text. The UI shows a live progress log so users can see scans finishing, analysis running, evaluation passing/failing, and retries happening — all in real time.
+`app.py` is the frontend. It doesn't know or care about LangGraph internals — it calls `run_news_monitor_stream(company, industry, competitors, time_window)` and iterates over a generator that yields progress messages as each scan finishes, then the final digest text. The UI has a CheckboxGroup of 10 predefined competitors (plus an ad-hoc text field for custom ones) and a time window dropdown. The progress log shows each competitor scan completing in real time.
 
 ---
 
@@ -73,13 +69,11 @@ LangGraph solved this by giving us explicit control. Each node constructs its ow
 
 | Node | Model | Why |
 |------|-------|-----|
-| Scan | GPT-4o | Solid at summarizing search results, reliable tool-adjacent behavior |
-| Analyze | Claude Sonnet | Stronger at structured analytical reasoning, better at segmenting for audiences |
-| Recommend | Claude Sonnet | Better at strategic synthesis, produces more actionable outputs |
-| Evaluate | Claude Sonnet | Good analytical judgment for rubric-based evaluation — same caliber as the nodes it judges |
-| Write briefing | GPT-4o-mini | The cheapest option — by this point, the hard thinking is done, and this node just formats |
+| scan_news | None (no LLM) | Pure search — fires 42 Serper queries and collects raw results. No summarization, no token cost. |
+| compile_digest | GPT-4o-mini | Cheap and fast — the only LLM call in the news monitor. Deduplicates, categorizes, and formats raw results into a digest. |
+| Disambiguation | GPT-4o-mini (temp 0.1) | ~$0.001 per competitor to generate search-friendly names and exclusion terms. |
 
-This is a pattern worth remembering: **match the model to the cognitive demand of the task**. You wouldn't hire a senior architect to paint walls. The scan node does relatively mechanical work (read search results, extract key points), so a cheaper/faster model works fine. The analysis node needs to reason across multiple competitors and segment findings for different audiences — that's where you want the stronger model.
+This is a pattern worth remembering: **match the model to the cognitive demand of the task**. The previous briefing pipeline used Claude Sonnet for analysis and recommendations — models chosen for their reasoning ability. The news monitor doesn't *need* reasoning; it needs to collect data and format it cleanly. A single GPT-4o-mini call handles the formatting, and the search nodes don't use an LLM at all. The result is roughly 90% cheaper per run.
 
 ### Why Serper Instead of LLM Tool-Calling
 
@@ -94,43 +88,43 @@ This sidesteps the entire tool-calling format problem. It's also more predictabl
 
 ### The Dual-Endpoint Search Strategy
 
-The briefing scan uses **two Serper endpoints** to get the best of both worlds:
+The news monitor scan uses **two Serper endpoints** to get the best of both worlds — 42 queries per competitor total:
 
-1. **`/news` endpoint** (15 queries per competitor, filtered to past month): This returns actual news articles sorted by recency — press releases, earnings reports, product announcements, M&A news, executive appointments, regulatory actions, analyst coverage, trade show news (IFPE, bauma, ConExpo, Hannover Messe), electrification/electrohydraulic technology trends, distributor/channel moves, capex/manufacturing investments, and fluid power-specific press. Each result comes with a publication date, so the LLM knows how fresh the intelligence is. The `tbs=qdr:m` parameter asks Serper to restrict results to the last 30 days — but this isn't always reliable (see Bug 5 below), so we also filter in code.
+1. **`/news` endpoint** (25 queries per competitor, filtered by time window): This returns actual news articles sorted by recency — press releases, earnings reports, product announcements, M&A news, executive appointments, regulatory actions, analyst coverage, trade show news (IFPE, bauma, ConExpo, Hannover Messe), electrification/electrohydraulic technology trends, distributor/channel moves, capex/manufacturing investments, supply chain disruption, sustainability/ESG, safety recalls, R&D innovation, layoffs/restructuring, government contracts, industrial automation, construction/off-highway, tariffs/trade regulation, and fluid power-specific press. Each result comes with a publication date. The `tbs` parameter is set according to the user's chosen time window (`qdr:w` for past week, `qdr:w2` for past 2 weeks, `qdr:m` for past month) — but this isn't always reliable (see Bug 5 below), so we also filter in code.
 
-2. **`/search` endpoint** (8 queries per competitor, no date filter): This picks up broader context that news doesn't cover — strategy pages on company websites, job postings on LinkedIn/Indeed (a leading indicator of strategic direction), patent filings on USPTO, regulatory/trade exposure, and **site-targeted searches** for key hydraulics trade publications (Hydraulics & Pneumatics, Fluid Power World, Fluid Power Journal, Mobile Hydraulic Tips, Power & Motion, OEM Off-Highway) and PR wire services (PRNewswire, BusinessWire, GlobeNewsWire).
+2. **`/search` endpoint** (17 queries per competitor, no date filter): This picks up broader context that news doesn't cover — strategy/growth plans, product roadmaps, job postings on LinkedIn/Indeed/Glassdoor/ZipRecruiter, patent filings on USPTO and Google Patents, SEC filings (10-K, 10-Q, 8-K), coverage from Reuters/Bloomberg/FT, LinkedIn posts/articles, and **site-targeted searches** for key hydraulics trade publications (Hydraulics & Pneumatics, Fluid Power World, Fluid Power Journal, Mobile Hydraulic Tips, Power & Motion, OEM Off-Highway, IFPE, Diesel Progress, Fluid Power Net), automation/engineering publications (Automation World, Control Engineering, Plant Engineering, Machine Design, Design World, The Engineer), construction publications (Equipment World, For Construction Pros, Construction Equipment), industry associations (NFPA, FPDA, NAHAD), and PR wire services (PRNewswire, BusinessWire, GlobeNewsWire).
 
-**Every query includes the industry term** (except the site-targeted trade press queries, which are already scoped to hydraulics publications by domain). This is critical for disambiguation — a search for "ATOS product launch" returns the French IT company Atos SE; a search for "ATOS Hydraulics & Mobile Machinery product launch" returns the right one. Without industry context, common or ambiguous company names pollute results with the wrong entity (see Bug 6 below).
+**The time window is user-configurable.** The UI offers three options: past week, past 2 weeks (default), and past month. This controls both the Serper `tbs` parameter and the code-level `_is_recent_news()` filter threshold. Shorter windows produce tighter, more actionable digests; longer windows catch more but include more noise.
 
-Results are tagged `[NEWS (date)]` or `[WEB]` so the LLM can prioritise recent news over older web content. The task prompt explicitly instructs the LLM to flag findings from the past 30 days as `[RECENT]`.
+**Every query includes the industry term** (except the site-targeted queries, which are already scoped to specific publications by domain). This is critical for disambiguation — a search for "ATOS product launch" returns the French IT company Atos SE; a search for "ATOS Hydraulics & Mobile Machinery product launch" returns the right one. Without industry context, common or ambiguous company names pollute results with the wrong entity (see Bug 6 below).
 
-**Raw search results are threaded directly to the report writer.** The scan nodes return two things: (1) the LLM summary in `scan_results` (used by the analysis pipeline), and (2) the original Serper results with real URLs in `raw_search_results` (used by `write_briefing`). This prevents the report writer from hallucinating URLs — it has access to every real URL that came back from Serper, even though the intermediate analysis nodes never see this raw data. The task prompt explicitly instructs the writer to extract URLs from this raw data and never invent links.
+Results are tagged `[NEWS (date)]` or `[WEB]` so the compile_digest LLM can prioritise recent news over older web content. Since the news monitor has no intermediate LLM summarization steps, every result that `compile_digest` sees carries its original Serper URL — no risk of URL hallucination from lossy LLM hops.
 
-**Three layers of freshness defence** keep stale news out of the briefing:
-1. **API layer**: `tbs="qdr:m"` hint to Serper (unreliable but helps)
-2. **Code layer**: `_is_recent_news()` in `graph.py` parses each result's date string (relative like "3 days ago" or absolute like "Jan 15, 2024") and discards anything older than 45 days before it reaches the LLM
-3. **LLM layer**: The scan prompt tells the LLM today's date and instructs it to only report items as recent if their date is within 45 days. The `write_briefing` task has a DATE FRESHNESS RULE requiring the Latest News section to only contain news from the past 30-45 days.
+**Two layers of freshness defence** keep stale news out of the digest:
+1. **API layer**: `tbs` parameter set per the chosen time window (unreliable but helps)
+2. **Code layer**: `_is_recent_news()` in `graph.py` parses each result's date string (relative like "3 days ago" or absolute like "Jan 15, 2024") and discards anything older than the time window's max_age_days before it reaches `compile_digest`
 
-**Disambiguation works at three layers:**
+**Disambiguation works at two layers in the news monitor:**
 1. **LLM disambiguation layer**: Before any searches run, `_disambiguate_competitor()` calls gpt-4o-mini to generate a search-friendly name (e.g., "ATOS SpA hydraulic valves" instead of "ATOS"), Google exclusion operators (e.g., `-"Atos SE" -"Eviden"`), and a one-sentence identity description. This is cheap (~$0.001 per call) and dramatically improves query precision for ambiguous names.
 2. **Query layer**: Every search query uses the disambiguated search name + exclusion terms + `{industry}` to anchor results to the right company
-3. **LLM layer**: Both `scan_competitor` and `scan_annual_report` prompts include the disambiguation context sentence, giving the summarising LLM a clear identity for the competitor so it can discard wrong-company results
+
+(The annual report pipeline adds a third layer — the LLM summarization prompt includes the disambiguation context sentence so it can discard wrong-company results during synthesis.)
 
 This matters because using only the regular `/search` endpoint was the app's biggest blind spot. Google's web search returns a mix of evergreen content (company "About" pages, Wikipedia) and actual news — and the evergreen stuff often ranks higher. The `/news` endpoint cuts through that noise and surfaces the breaking developments a strategy manager actually cares about.
 
-**Lesson**: When your use case is "tell me what happened recently," use a news-specific search endpoint if one exists. Generic web search is optimised for relevance, not recency — and for competitive intelligence, recency *is* relevance. But don't trust any single layer — the `tbs` parameter, the code-level date filter, and the LLM prompt instructions all reinforce each other. Defence in depth beats relying on one mechanism.
+**Lesson**: When your use case is "tell me what happened recently," use a news-specific search endpoint if one exists. Generic web search is optimised for relevance, not recency — and for competitive intelligence, recency *is* relevance. But don't trust any single layer — the `tbs` parameter and the code-level date filter reinforce each other. Defence in depth beats relying on one mechanism.
 
 ### Real-Time Progress: Streaming Node Completions to the UI
 
-Here's a UX problem that's easy to overlook: the briefing pipeline takes 2-5 minutes. For that entire time, the user sees a static "Generating briefing..." message and nothing else. Are the scans running? Did something crash? Is it stuck? No way to tell. This is the "spinning beach ball" problem — the system is working fine, but it *feels* broken.
+Here's a UX problem that's easy to overlook: even though the news monitor is fast (60-90 seconds), scanning 10 competitors still takes long enough that users wonder if anything is happening. This is the "spinning beach ball" problem — the system is working fine, but it *feels* broken if you stare at a static spinner for a minute.
 
-The fix uses a LangGraph feature called **streaming mode**. Instead of `graph.invoke()` (which blocks until everything is done and returns the final state), you call `graph.stream(inputs, stream_mode="updates")`. This returns a generator that yields a chunk after *each graph node completes*. Each chunk is a dict like `{"scan_competitor": {"scan_results": [...]}}` — the node name and its output.
+The fix uses a LangGraph feature called **streaming mode**. Instead of `graph.invoke()` (which blocks until everything is done and returns the final state), you call `graph.stream(inputs, stream_mode="updates")`. This returns a generator that yields a chunk after *each graph node completes*. Each chunk is a dict like `{"scan_news": {"news_results": [...]}}` — the node name and its output.
 
-The pipeline runners (`run_pipeline_stream()` and `run_annual_report_pipeline_stream()`) wrap this into a cleaner interface. They iterate over the stream chunks, map each node name to a human-readable message (e.g., `"scan_competitor"` → `"✓ Scanned Parker Hannifin"`), and yield `("progress", message)` tuples. At the end, they yield `("result", briefing_text)`.
+The pipeline runners (`run_news_monitor_stream()` and `run_annual_report_pipeline_stream()`) wrap this into a cleaner interface. They iterate over the stream chunks, map each node name to a human-readable message (e.g., `"scan_news"` for Parker Hannifin yields `"✓ Scanned Parker Hannifin"`), and yield `("progress", message)` tuples. At the end, they yield `("result", digest_text)`.
 
-On the Gradio side, the `on_generate()` callback is already a generator (it uses `yield` to update the UI incrementally). It just iterates over the stream and yields a new UI state after each progress message. Gradio's generator pattern handles the rest — each `yield` pushes an update to the browser.
+On the Gradio side, the `on_generate()` callback is already a generator (it uses `yield` to update the UI incrementally). It just iterates over the stream and yields a new UI state after each progress message. Gradio's generator pattern handles the rest — each `yield` pushes an update to the browser. Users see each competitor's scan finishing in real time, then the "digest compiled" message at the end.
 
-The non-streaming `run_pipeline()` and `run_annual_report_pipeline()` functions still exist as thin wrappers that print progress to stdout. The CLI uses these. Same underlying stream, different output target.
+The non-streaming `run_news_monitor()` and `run_annual_report_pipeline()` functions still exist as thin wrappers that print progress to stdout. The CLI uses these. Same underlying stream, different output target.
 
 **Lesson**: When your backend already processes work in discrete steps (graph nodes, pipeline stages, batch items), surfacing those steps to the user is almost free — you just need the framework to yield between steps instead of blocking until the end. LangGraph's `stream_mode="updates"` does exactly this. The key insight is that "progress feedback" doesn't require streaming tokens from the LLM (which is complex and async) — it just requires knowing when each *stage* finishes, which is much simpler.
 
@@ -138,45 +132,35 @@ The non-streaming `run_pipeline()` and `run_annual_report_pipeline()` functions 
 
 The original CrewAI version scanned competitors one at a time. With 4 competitors, that's 4 sequential LLM calls + 4 sets of web searches, all waiting on each other. The fan-out approach runs them in parallel using LangGraph's `Send()` primitive.
 
-This is a real-world performance win. Each scan takes maybe 15-30 seconds (network calls + LLM inference). Sequential: 60-120 seconds. Parallel: still 15-30 seconds. The analysis, recommendation, and writing stages have to be sequential (each depends on the previous), but the scanning stage is embarrassingly parallel — each competitor scan is completely independent.
+This is a real-world performance win. Each scan takes maybe 15-30 seconds (network calls to Serper). Sequential: 60-120 seconds. Parallel: still 15-30 seconds. The scanning stage is embarrassingly parallel — each competitor scan is completely independent, and the only sequential step (`compile_digest`) runs once after all scans converge.
 
-LangGraph handles the fan-in automatically: the `scan_results` field in state uses `Annotated[list[str], operator.add]`, which means results from parallel nodes get concatenated into a single list. This is a nice pattern — you declare the merge strategy in the type annotation, and the framework handles the rest.
+LangGraph handles the fan-in automatically: the `news_results` field in state uses `Annotated[list[str], operator.add]`, which means results from parallel nodes get concatenated into a single list. This is a nice pattern — you declare the merge strategy in the type annotation, and the framework handles the rest.
 
-### The Evaluator: A Quality Gate That Loops
+### The Annual Report Evaluator: An LLM Quality Gate
 
-Here's a problem with any LLM pipeline: the output quality is inconsistent. Sometimes the analysis node produces a beautifully structured document with all three audience sections, urgency ratings, and a Key Patterns summary. Other times, it generates a wall of vague observations with no structure. The recommendations node might produce 18 well-rated strategic items one run and 7 generic platitudes the next. Whatever comes out goes straight into the final briefing — there's no quality gate.
+Here's a problem with any LLM pipeline: the output quality is inconsistent. Sometimes the synthesis produces a beautifully structured document with all 15 sections, specific facts, and cited sources. Other times, it generates a wall of vague observations with no structure. Without a quality gate, whatever comes out goes straight to the user.
 
-The evaluator fixes this with an **LLM-as-judge** pattern. Think of it like a code review before merging: the `evaluate` node reads the analysis and recommendations, checks them against the rubrics already defined in `tasks.yaml` (are there 3 audience sections? are there 12-20 recommendations? do they have impact/difficulty ratings?), and returns a verdict: pass, fail_analysis, fail_recommendations, or fail_both.
+The annual report pipeline fixes this with an **LLM-as-judge** pattern. Think of it like a code review before merging: after the LLM generates a competitor report, an evaluator checks it against a rubric (all 15 sections present? specific facts cited? diverse sources? no padding?), and returns a verdict: pass or fail.
 
-If something fails, the pipeline **loops back** to re-run only the failing node — but this time, the evaluator's specific feedback gets injected into the prompt. Instead of the LLM seeing just the original task description, it also sees something like: *"PREVIOUS ATTEMPT FEEDBACK: Missing Key Patterns section. Engineering section lacks urgency ratings. Only 3 of 5 required trends identified."* The LLM gets a second chance to get it right, with concrete guidance on what was wrong.
+If it fails, the pipeline **retries** — but this time, the evaluator's specific feedback gets injected into the prompt. Instead of the LLM seeing just the original task description, it also sees something like: *"PREVIOUS ATTEMPT FEEDBACK: Missing Patents section. Only 2 sources used — need more diversity. Customer Sentiment section is padded with generic observations."* The LLM gets a second chance to get it right, with concrete guidance on what was wrong.
 
 A few design decisions worth understanding:
 
 **Why fail-open on parse errors?** The evaluator is asked to return JSON (`{"evaluation_result": "pass", "evaluation_feedback": "..."}`). But LLMs aren't reliable JSON producers — sometimes they wrap it in markdown fences, sometimes they add preamble text. If JSON parsing fails, the evaluator defaults to `"pass"` and logs a warning. The alternative — blocking the entire pipeline because the evaluator messed up its formatting — is worse than letting a potentially imperfect report through. The evaluator is a safety net, not a brick wall.
 
-**Why max 2 retries?** Each retry costs an LLM call (or two — if the analysis is retried, the recommendation step re-runs too since it depends on the analysis). The math: best case is 1 extra call (~5-10 seconds), typical retry is 2-3 extra calls (~20-30 seconds), worst case is 5 extra calls (~60-120 seconds). Beyond 2 retries, the output is unlikely to improve significantly — if the LLM can't get it right in 3 attempts, a 4th probably won't help. Better to let the imperfect report through and let the human reader notice the gaps.
+**Why max 2 retries?** Each retry costs an LLM call. Beyond 2 retries, the output is unlikely to improve significantly — if the LLM can't get it right in 3 attempts, a 4th probably won't help. Better to let the imperfect report through and let the human reader notice the gaps.
 
-**Why fix analysis first when both fail?** Recommendations depend on analysis. If the analysis is vague and generic, the recommendations will be too — no matter how many times you retry the recommendation node. Fixing analysis first, then letting recommendations re-run on the improved analysis, gives the best chance of both meeting the bar.
+**Why not evaluate the news monitor's digest?** The news monitor's `compile_digest` is a formatting/dedup task on raw search results — the "quality" is primarily about search coverage (handled by the 42 queries) and formatting (handled by GPT-4o-mini). If the formatting is off, it's cheaper to just re-run than to build an evaluator. The evaluator pattern makes sense for the annual report because that pipeline asks an LLM to *synthesize* a deep analytical document where quality genuinely varies between runs.
 
-**Why not evaluate scan results?** Scans are data gathering with inherent source variability — some competitors have tons of recent news, others are quiet. Failing a scan because "not enough findings" would just cause retry loops with no improvement (the web results don't change). The evaluator focuses on the nodes where LLM quality actually varies: the analytical and synthesis stages.
-
-This pattern — LLM-as-judge with conditional routing — is reusable. Any time you have an LLM producing structured output that must meet a spec, you can slot in an evaluator node that checks the spec and loops back with feedback. The key ingredients: a rubric (what "good" looks like), a JSON verdict format, fail-open defaults, and a retry cap.
-
-### The Annual Report Evaluator: Same Pattern, Different Topology
-
-The annual report pipeline also has an evaluator — but it works differently because of how the pipeline is structured.
-
-In the main briefing pipeline, evaluation is a **graph-level node**. The graph goes `analyze → recommend → evaluate → write_briefing`, and the evaluate node can route back to retry either upstream node. This works because those nodes run sequentially — there's one analysis and one set of recommendations to check.
-
-The annual report pipeline is different. It uses `Send()` fan-out: each competitor gets its own parallel `scan_annual_report` branch, and all branches converge after that single node. If you added a graph-level evaluate node, it would run once after *all* scans complete and would have to evaluate all reports in a single pass — losing the ability to retry individual competitors. Imagine a quality inspector at the end of a factory line who can only reject the entire batch, not individual items.
+**Why inline evaluation instead of a separate graph node?** The annual report pipeline uses `Send()` fan-out: each competitor gets its own parallel `scan_annual_report` branch, and all branches converge after that single node. If you added a graph-level evaluate node, it would run once after *all* scans complete and would have to evaluate all reports in a single pass — losing the ability to retry individual competitors. Imagine a quality inspector at the end of a factory line who can only reject the entire batch, not individual items.
 
 So instead, the annual report evaluation happens **inline** — inside `scan_annual_report()` itself. After the LLM generates a competitor report, the same function immediately evaluates it against a rubric (all 15 sections present? specific facts cited? diverse sources?). If it fails, the function retries the LLM call with the feedback appended — all within the same function invocation. Each parallel branch independently evaluates and retries its own report, without affecting the others.
 
-The key differences from the graph-level approach:
+The key details:
 - **No new graph nodes or edges** — the evaluation loop is a Python `for` loop inside the existing node function
 - **Per-competitor retries** — if Competitor A's report fails but Competitor B's passes, only A retries
 - **Web searches not re-run** — retries re-invoke only the LLM with the same search context plus feedback. The Serper results don't change between attempts, and re-fetching them would waste time and API credits
-- **Same retry cap (2)** and **same fail-open behavior** as the main pipeline — consistency makes the system easier to reason about
+- **Same retry cap (2)** and **same fail-open behavior** — consistency makes the system easier to reason about
 
 This is a useful pattern to remember: **when your pipeline uses fan-out parallelism, quality gates must live inside the parallel branches, not after convergence**. A graph-level evaluator after fan-in would lose per-item granularity. Inline evaluation preserves it.
 

@@ -89,7 +89,7 @@ def search_serper_news(query: str, num_results: int = 10, tbs: str = "qdr:m") ->
   - `"qdr:m"` = past month (the default)
   - `"qdr:y"` = past year
 
-This is critical for competitive intelligence — you don't want last year's news mixed in with this week's announcements.
+This is critical for competitive intelligence — you don't want last year's news mixed in with this week's announcements. The `scan_news` node passes the `tbs` value from state (derived from the user's selected time window) rather than relying on this default.
 
 ```python
     resp = requests.post(
@@ -118,15 +118,15 @@ The `/news` response contains a `"news"` key (not `"organic"`), and each result 
 }
 ```
 
-The calling code in `graph.py` accesses `data.get("news", [])`, checks each result's date with `_is_recent_news()` (discarding anything older than 45 days), and includes the date in the tagged output: `[NEWS (2 hours ago)] [Title](URL): Snippet`. This code-level filtering is necessary because the `tbs` parameter is a hint to Google that isn't always respected — stale results from 2023/2024 can slip through.
+The calling code in `graph.py` accesses `data.get("news", [])`, checks each result's date with `_is_recent_news()` (discarding anything older than a configurable `max_age_days` derived from the selected time window), and includes the date in the tagged output: `[NEWS (2 hours ago)] [Title](URL): Snippet`. This code-level filtering is necessary because the `tbs` parameter is a hint to Google that isn't always respected — stale results from 2023/2024 can slip through. The time window is configurable from the UI (e.g. "past 2 weeks", "past month") and determines both the `tbs` value sent to Serper and the `max_age_days` used for local date filtering.
 
 ---
 
 ## Why Two Endpoints?
 
-The briefing scan uses **both** functions — 9 news queries + 5 web queries per competitor. The reason: Google's regular web search returns a mix of evergreen content (company "About" pages, Wikipedia articles, old blog posts) and actual news. For competitive intelligence, you need *recency* — and the `/news` endpoint is optimised for exactly that. It surfaces breaking news, press releases, and recent articles that would be buried on page 2 of web search results.
+The news monitor's `scan_news` node uses **both** functions — 25 news queries + 17 web queries per competitor (42 total). The reason: Google's regular web search returns a mix of evergreen content (company "About" pages, Wikipedia articles, old blog posts) and actual news. For competitive intelligence, you need *recency* — and the `/news` endpoint is optimised for exactly that. It surfaces breaking news, press releases, and recent articles that would be buried on page 2 of web search results.
 
-The web queries complement the news with signals that don't appear as news articles: job postings (leading indicator of strategy), patent filings, regulatory documents, and company strategy pages.
+The web queries complement the news with signals that don't appear as news articles: job postings (leading indicator of strategy), patent filings, SEC filings, regulatory documents, trade publication coverage, industry association content, and company strategy pages. The 17 web queries include site-targeted searches against trade publications (hydraulicspneumatics.com, fluidpowerworld.com, etc.), PR wires (prnewswire.com, businesswire.com), financial sites (reuters.com, sec.gov), and job boards (linkedin.com, glassdoor.com).
 
 ---
 
@@ -142,4 +142,4 @@ The web queries complement the news with signals that don't appear as news artic
 
 **5. Same timeout and auth pattern for both endpoints.** Consistency across functions reduces cognitive load and makes bugs easier to spot. Both use `os.environ["SERPER_API_KEY"]` (fail-fast on missing key), both have `timeout=15`, both call `raise_for_status()`.
 
-**6. Raw results are preserved for downstream nodes.** The scan nodes in `graph.py` store the original Serper results (with real URLs) in a `raw_search_results` state field alongside the LLM-summarized `scan_results`. This raw data bypasses the analysis pipeline and flows directly to `write_briefing`, which uses it to cite real, clickable URLs in the briefing's "Latest News" section. Without this, the report writer would only see text that had been through 2-3 LLM summarization hops — and LLMs are lossy compressors that don't reliably preserve URLs. The tools themselves are stateless and don't know about this — it's `graph.py` that decides what to do with each result.
+**6. scan_news skips LLM summarization entirely.** In the news monitor pipeline, the `scan_news` node collects raw Serper results (tagged `[NEWS (date)]` or `[WEB]` with real URLs) into a `news_results` state field — no LLM touches the data at this stage. The raw results flow directly to `compile_digest` (GPT-4o-mini), which deduplicates, categorizes, and formats them into the final digest. This is simpler than the old briefing pipeline, which had a `raw_search_results` field to thread URLs around multiple LLM hops. Now there's only one LLM hop total: Serper results go in, formatted digest comes out. The tools themselves are stateless and don't know about this — it's `graph.py` that decides what to do with each result.

@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-A LangGraph-powered competitive intelligence platform with a Gradio web UI. The system orchestrates four pipeline nodes (trend scanner, company analyst, strategy advisor, report writer) using a fan-out/fan-in graph to generate executive-ready competitive intelligence briefings. Each node uses its own LLM client (OpenAI or Anthropic) with independent message history, enabling multi-provider pipelines. A secondary chat interface allows Q&A against the briefing (via OpenAI) and deep-dive research with live web search (via Anthropic + Serper).
+A LangGraph-powered competitive intelligence platform with a Gradio web UI. The system orchestrates a two-node News Monitor pipeline (scan_news, compile_digest) using a fan-out/fan-in graph to generate categorized news digests from live web and news search results. The scan node collects raw search results with no LLM summarization; a single compile node deduplicates, categorizes, and formats the digest using GPT-4o-mini. A secondary chat interface allows Q&A against the news digest (via OpenAI) and deep-dive research with live web search (via Anthropic + Serper).
 
 ## Architecture
 
@@ -11,33 +11,31 @@ competitive_intel/
 ├── app.py                          # Gradio UI, chat, deep-dive (entry point)
 ├── pyproject.toml                  # Project metadata and dependencies
 ├── uv.lock                        # Locked dependency versions
-├── output/                         # Generated briefing reports (gitignored)
+├── output/                         # Generated reports (news_digest.md, annual reports) (gitignored)
 └── src/competitive_intel/
     ├── __init__.py
     ├── main.py                     # CLI entry point (run)
     ├── graph.py                    # LangGraph StateGraph definition and pipeline nodes
     ├── config/
-    │   ├── agents.yaml             # Agent roles, goals, backstories (used as system prompts)
-    │   └── tasks.yaml              # Task descriptions and expected outputs (used as user prompts)
+    │   ├── agents.yaml             # Agent roles, goals, backstories (news_digest_curator + annual report agents)
+    │   └── tasks.yaml              # Task descriptions and expected outputs (compile_news_digest + annual report tasks)
     └── tools/
         └── __init__.py             # search_serper() and search_serper_news() for web/news search
 ```
 
-### Briefing Pipeline Graph
+### News Monitor Pipeline Graph
 
 ```
-                    ┌─ scan(competitor_A) ─┐
-User Input ──→ fan_out ─→ scan(competitor_B) ─→ fan_in ──→ analyze ──→ recommend ──→ evaluate ─── pass ──→ write_briefing
-                    └─ scan(competitor_C) ─┘                ↑            ↑              │
-                                                           │            │              ├─ fail_analysis ──→ retry
-                                                           │            │              └─ fail_recs ──→ retry
-                                                           └────────────└──────────────────────────┘
+                         ┌─ scan_news(competitor_A) ─┐
+User Input ──→ fan_out ─→ scan_news(competitor_B) ─→ fan_in ──→ compile_digest
+                         └─ scan_news(competitor_C) ─┘
 ```
 
-- **Fan-out**: Parallel scan nodes (one per competitor), each starting with an LLM disambiguation call (`_disambiguate_competitor()` via gpt-4o-mini) that generates a search-friendly name, Google exclusion terms, and a context sentence. Then runs 15 Serper News searches (recent news, past month — including trade press, trade shows, electrification/tech trends, distributor/channel, press releases, and capex/manufacturing) + 8 Serper Web searches (broader context — including site-targeted queries for hydraulics trade publications and PR wire services) using the disambiguated name + exclusion terms, then summarizes with GPT-4o. News results are date-filtered (older than 45 days discarded) before reaching the LLM. The LLM prompt includes the disambiguation context and date freshness instructions. Each scan node also returns the raw Serper results (with real URLs) in `raw_search_results`, which bypasses the LLM summarization and flows directly to `write_briefing`.
-- **Fan-in**: Aggregates all scan results and raw search results into shared state
-- **Sequential**: analyze (Claude Sonnet) → recommend (Claude Sonnet) → evaluate (Claude Sonnet) → write_briefing (GPT-4o-mini, receives analysis + recommendations + raw search results with real URLs)
-- **Quality gate**: The evaluate node checks analysis and recommendations against rubrics. Failures route back to retry the failing node with feedback. Max 2 retries per node.
+- **Fan-out**: Parallel scan_news nodes (one per competitor), each starting with an LLM disambiguation call (`_disambiguate_competitor()` via gpt-4o-mini) that generates a search-friendly name, Google exclusion terms, and a context sentence. Then runs 25 Serper News searches + 17 Serper Web searches (42 total per competitor — including trade press, trade shows, electrification/tech trends, distributor/channel, press releases, capex/manufacturing, and site-targeted queries for trade publications and PR wire services) using the disambiguated name + exclusion terms. There is **no LLM summarization** in the scan node — raw Serper results (with real URLs, titles, snippets, and dates) are passed directly to state. News results are date-filtered based on the configurable time window before being added to state.
+- **Fan-in**: Aggregates all raw news results from parallel scan nodes into shared `news_results` state.
+- **Compile**: compile_digest (GPT-4o-mini) receives all raw results and deduplicates, categorizes, and formats them into a structured markdown news digest. Output saved to `output/news_digest.md`.
+- **State**: `NewsMonitorState` TypedDict with fields: `company`, `industry`, `competitors`, `current_date`, `time_window`, `news_results` (Annotated list, accumulates across parallel nodes), `digest`.
+- **Time window**: Configurable via UI dropdown — `past_week` (Serper `tbs=qdr:w`, code filter 7 days), `past_2_weeks` (`tbs=qdr:w2`, 14 days), `past_month` (`tbs=qdr:m`, 30 days).
 
 ### Annual Report Pipeline Graph
 
@@ -53,10 +51,10 @@ User Input ──→ fan_out_annual ─→ scan_annual_report(competitor_B) [+ i
 
 ### Key Components
 
-- **LangGraph Pipeline** (`graph.py`): A `StateGraph` with fan-out/fan-in for parallel competitor scanning, followed by sequential analysis, recommendations, and report writing. Each node makes its own LLM API call with a clean message list — no shared conversation history between nodes.
-- **Gradio App** (`app.py`): Web UI with briefing generation (with real-time progress log), report loading, quick chat (OpenAI gpt-4o-mini), and deep-dive research (Serper search + Anthropic Claude synthesis). Progress updates stream to the UI as each pipeline node completes.
+- **LangGraph Pipeline** (`graph.py`): Two separate `StateGraph` definitions — the News Monitor graph (fan-out scan_news per competitor, fan-in, then compile_digest) and the Annual Report graph (unchanged). The scan_news node makes no LLM call (raw Serper results only); compile_digest makes a single GPT-4o-mini call. The annual report nodes each make their own LLM calls with clean message lists.
+- **Gradio App** (`app.py`): Web UI with news monitor generation (with real-time progress log and configurable time window), report loading, quick chat (OpenAI gpt-4o-mini), and deep-dive research (Serper search + Anthropic Claude synthesis). The competitor input uses a CheckboxGroup of 10 predefined competitors plus an ad-hoc text field for additional names. Progress updates stream to the UI as each pipeline node completes.
 - **CLI** (`main.py`): `run()` function callable via `competitive_intel` script entry point. Uses the same streaming generators as the UI, printing progress to stdout.
-- **Config** (`agents.yaml`, `tasks.yaml`): Agent roles/backstories and task descriptions loaded at runtime and interpolated into system/user prompts for each node.
+- **Config** (`agents.yaml`, `tasks.yaml`): The `news_digest_curator` agent and `compile_news_digest` task are loaded at runtime and interpolated into prompts for the compile_digest node. Annual report agent/task configs remain unchanged.
 
 ## Tech Stack
 
@@ -72,9 +70,9 @@ User Input ──→ fan_out_annual ─→ scan_annual_report(competitor_B) [+ i
 ## Environment Variables (Required)
 
 ```
-OPENAI_API_KEY          # Used by scan and write_briefing nodes, and quick chat
-ANTHROPIC_API_KEY       # Used by analyze and recommend nodes, and deep-dive synthesis
-SERPER_API_KEY          # Used by scan nodes (news + web search) and deep-dive web search
+OPENAI_API_KEY          # Used by compile_digest node, disambiguation, and quick chat
+ANTHROPIC_API_KEY       # Used by annual report nodes and deep-dive synthesis
+SERPER_API_KEY          # Used by scan_news nodes (news + web search) and deep-dive web search
 ```
 
 These MUST be set in the environment before running. Never commit these values.
@@ -100,7 +98,7 @@ uv run competitive_intel   # Run the CLI pipeline
 - All user inputs from the Gradio UI (company, industry, competitors, chat messages) are passed to external LLM APIs. Treat these as untrusted.
 - Do not construct shell commands, file paths, or SQL queries from user input.
 - User input passed to `_search_web()`, `search_serper()`, and `search_serper_news()` goes directly to the Serper API — do not add any filesystem or command execution based on this input.
-- Validate that user inputs are non-empty strings before processing (as `run_briefing_stream()` already does).
+- Validate that user inputs are non-empty strings before processing (as `run_news_monitor_stream()` already does).
 
 ### Dependency Security
 - Keep dependencies pinned via `uv.lock`. Run `uv sync` to install exact locked versions.
@@ -108,13 +106,13 @@ uv run competitive_intel   # Run the CLI pipeline
 - Only add dependencies that are actively maintained and widely trusted.
 
 ### Output Handling
-- Briefing reports are written to `output/briefing.md`. This directory is gitignored to prevent accidental commit of sensitive competitive intelligence.
+- News digests are written to `output/news_digest.md`. This directory is gitignored to prevent accidental commit of sensitive competitive intelligence.
 - Do not serve the `output/` directory over a network or expose it publicly.
 - LLM responses are rendered as markdown in Gradio — Gradio handles sanitization, but do not bypass this by rendering raw HTML.
 
 ### Network Security
 - All external API calls (OpenAI, Anthropic, Serper) must use HTTPS. Do not downgrade to HTTP.
-- Serper has two endpoints: `/search` (web results) and `/news` (news articles with date filtering via `tbs` parameter). Both are used by the briefing scan. News results are also date-filtered in code (`_is_recent_news()` in `graph.py`) to discard stale results older than 45 days, since the `tbs` parameter is not always reliable.
+- Serper has two endpoints: `/search` (web results) and `/news` (news articles with date filtering via `tbs` parameter). Both are used by the news monitor scan (42 queries per competitor: 25 news + 17 web). News results are also date-filtered in code based on the configured time window (7, 14, or 30 days), since the `tbs` parameter is not always reliable.
 - Competitor names are disambiguated via `_disambiguate_competitor()` (gpt-4o-mini) which generates search-friendly names and Google exclusion operators. All search queries use the disambiguated name + exclusion terms + industry to prevent name ambiguity. LLM prompts include the disambiguation context sentence. The deep dive feature also receives company/industry context for its query generation and synthesis prompts.
 - Set explicit timeouts on all HTTP requests (as `search_serper()` and `search_serper_news()` do with `timeout=15`).
 - Do not add proxy or redirect-following logic that could leak credentials.
@@ -136,20 +134,17 @@ uv run competitive_intel   # Run the CLI pipeline
 ### LangGraph Patterns
 - Agent prompts (role, goal, backstory) live in `config/agents.yaml`. Task prompts (description, expected_output) live in `config/tasks.yaml`.
 - Each graph node in `graph.py` loads its prompts from these YAML configs, interpolates input variables, and makes a direct LLM call.
-- The graph uses `Send()` for fan-out (parallel competitor scans) and sequential edges for the analysis pipeline.
+- The graph uses `Send()` for fan-out (parallel competitor scans) and sequential edges for the compile step.
 - Each node constructs its own message list (system + user) — never pass message history between nodes.
-- State is shared via a `GraphState` TypedDict. Use `Annotated[list, operator.add]` for fields that accumulate across parallel nodes (e.g., `scan_results`, `raw_search_results`).
-- For UI progress, use `graph.stream(stream_mode="updates")` which yields a dict after each node completes. The `run_pipeline_stream()` and `run_annual_report_pipeline_stream()` generators wrap this into `("progress", msg)` / `("result", text)` tuples that Gradio consumes via generator yields. The non-streaming `run_pipeline()` and `run_annual_report_pipeline()` are thin wrappers that print progress to stdout for CLI use.
+- The News Monitor uses a `NewsMonitorState` TypedDict with fields: `company`, `industry`, `competitors`, `current_date`, `time_window`, `news_results` (`Annotated[list, operator.add]`), `digest`. The Annual Report uses its own `AnnualReportState`.
+- For UI progress, use `graph.stream(stream_mode="updates")` which yields a dict after each node completes. The `run_news_monitor_stream()` and `run_annual_report_pipeline_stream()` generators wrap this into `("progress", msg)` / `("result", text)` tuples that Gradio consumes via generator yields. The non-streaming `run_news_monitor()` and `run_annual_report_pipeline()` are thin wrappers that print progress to stdout for CLI use.
 
 ### LLM Model Selection
 - Disambiguation: GPT-4o-mini with low temperature (0.1) — cheap per-competitor call to generate search names and exclusion terms
-- Scan nodes: GPT-4o (reliable for search result summarization; receives ~184 results from 23 searches per competitor)
-- Analyze node: Claude Sonnet (better analytical reasoning)
-- Recommend node: Claude Sonnet (better strategic synthesis)
-- Evaluate node: Claude Sonnet (rubric-based quality judgment)
+- scan_news nodes: **No LLM call** — raw Serper results only (42 queries per competitor: 25 news + 17 web)
+- compile_digest node: GPT-4o-mini (cost-effective for deduplication, categorization, and formatting; receives raw search results with real URLs)
 - Annual report scan nodes: Claude Sonnet (deep analytical synthesis from 18 searches)
 - Annual report inline evaluator: Claude Sonnet (same quality gate, runs inside each parallel branch)
-- Write briefing node: GPT-4o-mini (cost-effective for formatting; receives raw search results with real URLs to prevent hallucinated links)
 - Quick chat: GPT-4o-mini with low temperature (0.1)
 - Deep-dive query generation: GPT-4o-mini (with industry context for disambiguation)
 - Deep-dive synthesis: Claude Sonnet with low temperature (0.1)
