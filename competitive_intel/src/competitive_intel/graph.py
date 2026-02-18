@@ -311,7 +311,9 @@ def scan_news(state: NewsScanState) -> dict:
         print(f"[scan_news] {competitor}: filtered out {skipped_old} results older than {max_age} days")
 
     print(f"[scan_news] Finished {competitor} — {len(all_results)} results from {len(news_queries)} news + {len(web_queries)} web queries")
-    raw_block = f"## {competitor}\n\n" + "\n".join(all_results) if all_results else f"## {competitor}\n\nNo search results found."
+    ctx = disambig["context"]
+    header = f"## {competitor}\n\n> Disambiguation: {ctx}\n" if ctx else f"## {competitor}\n"
+    raw_block = header + "\n" + "\n".join(all_results) if all_results else f"## {competitor}\n\nNo search results found."
     return {"news_results": [raw_block]}
 
 
