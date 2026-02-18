@@ -262,7 +262,7 @@ def scan_news(state: NewsScanState) -> dict:
     sn = disambig["search_name"]
     ex = disambig["exclude_terms"]
 ```
-**Lines 210-213:** Same disambiguation step as in the old briefing scan — calls gpt-4o-mini to get a search-friendly name and exclusion terms. The `sn` and `ex` variables are used in every search query below.
+**Lines 210-213:** Same disambiguation step as in the old briefing scan — calls gpt-4o-mini to get a search-friendly name, exclusion terms, and a one-sentence context description. The `sn` and `ex` variables are used in every search query below. The `context` field is used later when building the raw results block (see the return value section).
 
 ```python
     # ── News searches (25 queries) ───────────────────────────────────────────
@@ -403,13 +403,16 @@ Without threading, 42 sequential HTTP requests at ~0.5-1s each would take 21-42 
         print(f"[scan_news] {competitor}: filtered out {skipped_old} results older than {max_age} days")
 
     print(f"[scan_news] Finished {competitor} — {len(all_results)} results from {len(news_queries)} news + {len(web_queries)} web queries")
-    raw_block = f"## {competitor}\n\n" + "\n".join(all_results) if all_results else f"## {competitor}\n\nNo search results found."
+    ctx = disambig["context"]
+    header = f"## {competitor}\n\n> Disambiguation: {ctx}\n" if ctx else f"## {competitor}\n"
+    raw_block = header + "\n" + "\n".join(all_results) if all_results else f"## {competitor}\n\nNo search results found."
     return {"news_results": [raw_block]}
 ```
-**Lines 310-315:** Diagnostics and return value.
+**Lines 310-317:** Diagnostics and return value.
 - The skip count is logged for monitoring (helps detect when the time window filter is too aggressive).
 - The result count is logged so you can see how many results survived filtering.
-- All results are joined into a single markdown block with a `## CompetitorName` heading.
+- The disambiguation context sentence is included as a blockquote header (e.g., `> Disambiguation: Sun Hydraulics (now Helios Technologies) is a Florida-based manufacturer of hydraulic cartridge valves and manifolds`). This is critical for the `compile_digest` node — it gives GPT-4o-mini per-competitor identity information to confidently discard off-topic results that slipped through the search queries. Without it, generic company names like "SUN" can produce noise (e.g., bike rack articles) that the LLM has no basis to filter.
+- All results are joined into a single markdown block under the heading + context header.
 - The return value is `{"news_results": [raw_block]}` — a list with one string. The `operator.add` reducer on `news_results` will concatenate these lists across parallel scan nodes.
 
 **The critical difference from the old `scan_competitor`:** This node does **not** call an LLM. The old node fed all results into GPT-4o for summarization, which cost time and money and also lost the original URLs (the LLM would paraphrase and sometimes hallucinate links). `scan_news` just collects raw results with their real URLs, titles, and snippets. The single LLM call happens later in `compile_digest`, operating on all competitors' results at once rather than per-competitor.

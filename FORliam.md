@@ -69,7 +69,7 @@ LangGraph solved this by giving us explicit control. Each node constructs its ow
 
 | Node | Model | Why |
 |------|-------|-----|
-| scan_news | None (no LLM) | Pure search — fires 42 Serper queries and collects raw results. No summarization, no token cost. |
+| scan_news | None (no LLM) | Pure search — fires 42 Serper queries and collects raw results with disambiguation context header. No summarization, no token cost. |
 | compile_digest | GPT-4o-mini | Cheap and fast — the only LLM call in the news monitor. Deduplicates, categorizes, and formats raw results into a digest. |
 | Disambiguation | GPT-4o-mini (temp 0.1) | ~$0.001 per competitor to generate search-friendly names and exclusion terms. |
 
@@ -104,11 +104,12 @@ Results are tagged `[NEWS (date)]` or `[WEB]` so the compile_digest LLM can prio
 1. **API layer**: `tbs` parameter set per the chosen time window (unreliable but helps)
 2. **Code layer**: `_is_recent_news()` in `graph.py` parses each result's date string (relative like "3 days ago" or absolute like "Jan 15, 2024") and discards anything older than the time window's max_age_days before it reaches `compile_digest`
 
-**Disambiguation works at two layers in the news monitor:**
+**Disambiguation works at three layers in the news monitor:**
 1. **LLM disambiguation layer**: Before any searches run, `_disambiguate_competitor()` calls gpt-4o-mini to generate a search-friendly name (e.g., "ATOS SpA hydraulic valves" instead of "ATOS"), Google exclusion operators (e.g., `-"Atos SE" -"Eviden"`), and a one-sentence identity description. This is cheap (~$0.001 per call) and dramatically improves query precision for ambiguous names.
-2. **Query layer**: Every search query uses the disambiguated search name + exclusion terms + `{industry}` to anchor results to the right company
+2. **Query layer**: Every search query uses the disambiguated search name + exclusion terms + `{industry}` to anchor results to the right company.
+3. **Compile layer**: The disambiguation context sentence is included as a header in each competitor's raw results block (e.g., `> Disambiguation: Sun Hydraulics (now Helios Technologies) is a Florida-based manufacturer of hydraulic cartridge valves and manifolds`). This gives `compile_digest` per-competitor identity information to confidently discard off-topic results that slipped through the search layer — critical for generic company names like "SUN" where even well-crafted queries return noise.
 
-(The annual report pipeline adds a third layer — the LLM summarization prompt includes the disambiguation context sentence so it can discard wrong-company results during synthesis.)
+(The annual report pipeline adds a fourth layer — the LLM summarization prompt includes the disambiguation context sentence so it can discard wrong-company results during synthesis.)
 
 This matters because using only the regular `/search` endpoint was the app's biggest blind spot. Google's web search returns a mix of evergreen content (company "About" pages, Wikipedia) and actual news — and the evergreen stuff often ranks higher. The `/news` endpoint cuts through that noise and surfaces the breaking developments a strategy manager actually cares about.
 
